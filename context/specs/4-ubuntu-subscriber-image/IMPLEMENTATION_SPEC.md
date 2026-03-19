@@ -56,7 +56,9 @@ Notable observations:
 
 **Ubuntu 22.04 (Jammy).** Current LTS release with support through April 2027 (standard) / April 2032 (ESM). Using `ubuntu:22.04` as the base image. Jammy was chosen over 24.04 (Noble) because 22.04 is the most widely deployed Ubuntu LTS in production environments — matching the issue's motivation of testing against real-world subscriber distributions.
 
-**Single RUN layer for package installation.** All packages installed in one `apt-get install` command with `--no-install-recommends` and cache cleanup in the same layer.
+**Single RUN layer for package installation.** All packages installed in one `apt-get install` command with `--no-install-recommends` and cache cleanup in the same layer. `DEBIAN_FRONTEND=noninteractive` is set inline to prevent any potential interactive prompts during package installation.
+
+**Stop rule for entrypoint incompatibilities.** If Ubuntu reveals a behavioral difference in dhclient, pppd, or any entrypoint code path during implementation, stop immediately. Document the mismatch, file or amend the relevant issue (e.g., issue #1 for entrypoint changes), and do not merge the Ubuntu image until the incompatibility is resolved. The scope boundary is strict — this spec delivers one Dockerfile with no entrypoint modifications.
 
 ## 5. Configuration
 
@@ -115,7 +117,7 @@ Create `images/ubuntu/Dockerfile`:
 
 1. SPDX copyright header
 2. `FROM ubuntu:22.04`
-3. `RUN apt-get update && apt-get install -y --no-install-recommends isc-dhcp-client ppp iputils-ping iproute2 iperf3 curl ca-certificates netbase && rm -rf /var/lib/apt/lists/*`
+3. `RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends isc-dhcp-client ppp iputils-ping iproute2 iperf3 curl ca-certificates netbase && rm -rf /var/lib/apt/lists/*`
 4. `COPY shared/entrypoint.sh /entrypoint.sh`
 5. `RUN chmod +x /entrypoint.sh`
 6. `ENTRYPOINT ["/entrypoint.sh"]`
@@ -135,6 +137,7 @@ This is a single-phase implementation — no entrypoint changes or multi-step de
 - Dockerfile uses `COPY shared/entrypoint.sh` (not a forked copy)
 - SPDX copyright header present
 - PPPoE plugin present: `pppoe.so` exists under `/usr/lib/pppd/`
+- Ubuntu's default `/etc/dhcp/dhclient.conf` does not contain conflicting `timeout` or `retry` settings that would override the entrypoint-generated config
 
 ### DHCP Client Detection
 
@@ -150,20 +153,27 @@ This is a single-phase implementation — no entrypoint changes or multi-step de
 | QinQ + DHCPv4 | S-VLAN + C-VLAN created, dhclient obtains lease through QinQ |
 | Missing CVLAN with `ENCAP=single` | Entrypoint exits with error |
 | PPPoE launch | pppd starts with correct flags |
-| DHCP_TIMEOUT honored | Non-default DHCP_TIMEOUT value appears in generated dhclient.conf |
-| SIGTERM cleanup + lease release | VLAN interfaces removed; lease release via `dhclient -r` |
-| Container stays alive after lease | Container persists after lease acquisition for post-lease testing |
+| DHCP_TIMEOUT honored (config) | Non-default DHCP_TIMEOUT value appears in generated dhclient.conf |
+| DHCP_TIMEOUT honored (runtime) | With no DHCP server responding, dhclient exits non-zero around the configured deadline |
+| SIGTERM cleanup + lease release | VLAN interfaces removed; lease release verified via `ip addr show` confirming no address on target interface or DHCP server log showing DHCPRELEASE |
+| Container stays alive after lease | After successful lease, the `dhclient` process remains alive for renewals and the container persists for post-lease testing |
 
 ### Behavioral Parity with Debian
 
-Since Ubuntu and Debian both use `isc-dhcp-client`, behavior should be identical to the Debian image:
+Ubuntu and Debian both use `isc-dhcp-client`, but Ubuntu 22.04 ships version 4.4.1 while Debian 12 ships 4.4.3. Behavioral parity is expected but must be verified at the Ubuntu level — the Debian image's test results do not substitute for Ubuntu-specific validation.
 
+Runtime parity checks:
 - Same lease file location (`/var/lib/dhcp/dhclient.leases`)
-- Same foreground mode (`-d`)
-- Same release mechanism (`dhclient -r`)
-- Same timeout mechanism (config file with `timeout N;`)
+- Same foreground mode (`-d`) — dhclient stays alive managing renewals
+- Same release mechanism (`dhclient -r`) — verified via address removal or server DHCPRELEASE log
+- Same timeout mechanism (config file with `timeout N;`) — verified via exit behavior when no server responds
+- `DHCP_TIMEOUT` with non-default value causes dhclient to exit around the configured deadline (not the default 60s)
 
-Any difference would indicate a packaging or version discrepancy worth investigating.
+Any difference would indicate a packaging or version discrepancy. If a difference is found, stop implementation and file or amend the relevant issue before merging.
+
+### DHCPv6 Coverage
+
+The image supports DHCPv6 via `dhclient -6` (same binary, same entrypoint path). DHCPv6 is not explicitly revalidated by this issue's test matrix — it is inherited from the shared entrypoint validated in issues #1 and #3. If Ubuntu-specific DHCPv6 testing is needed, it should be added as a separate testing issue.
 
 ## 9. Not In Scope
 
