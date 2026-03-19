@@ -75,6 +75,7 @@ This convention is deterministic — any agent can derive the path from the issu
 - **Actor:** Human
 - **Output:** GitHub issue using the appropriate template
 - **Gate:** No work begins until the issue exists. Add the `approved` label to signal the issue is ready for the workflow.
+- **Priority:** Add a priority label to indicate implementation order. Priority is independent of issue number.
 - The issue IS the requirements document. Templates enforce structure (what, why, acceptance criteria, scope boundary). No separate requirements gathering step.
 
 ### Phase 1: Spec Draft (Claude)
@@ -305,6 +306,16 @@ Labels track workflow state and agent configuration. These are the contract that
 | `agents:all-three` | Full pipeline |
 
 The agent label is applied based on the "Workflow agents" dropdown selection in the issue template. Today this is manual — the human adds the label after creating the issue. When n8n is implemented, it will read the dropdown value and apply the label automatically.
+
+### Priority Labels
+
+| Label | Meaning |
+|-------|---------|
+| `priority:p0` | Critical path — blocks other work or is a core deliverable |
+| `priority:p1` | Important — should be done soon but doesn't block others |
+| `priority:p2` | Nice to have — do when higher priorities are clear |
+
+Priority is assigned by the human during Phase 0 and determines implementation order. Issue numbers do not imply priority.
 
 ### Issue Type Labels
 

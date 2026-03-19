@@ -42,6 +42,17 @@ body:
     validations:
       required: true
   - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: Implementation priority. P0 = critical path, P1 = important, P2 = nice to have.
+      options:
+        - P0 (critical path)
+        - P1 (important)
+        - P2 (nice to have)
+    validations:
+      required: true
+  - type: dropdown
     id: agents
     attributes:
       label: Workflow agents
