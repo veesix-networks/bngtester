@@ -1,6 +1,6 @@
 # 3-debian-subscriber-image
 
-**What:** Debian 12 (Bookworm) subscriber image using isc-dhcp-client for DHCPv4/DHCPv6 and ppp for PPPoE, reusing the shared entrypoint from issue #1.
+**What:** Debian 12 (Bookworm) subscriber image using isc-dhcp-client for DHCPv4/DHCPv6 and ppp for PPPoE, with minimal entrypoint fixes for dhclient compatibility.
 
 **Source Issue:** [#3](https://github.com/veesix-networks/bngtester/issues/3)
 
@@ -10,15 +10,18 @@
 |-------|--------|
 | Phase 0: Issue | Complete |
 | Phase 1: Spec Draft (Claude) | Complete |
-| Phase 2: Spec Refinement (Gemini) | Not Started |
-| Phase 3: Spec Critique (Codex) | Not Started |
-| Phase 4: Spec Finalization (Claude) | Not Started |
+| Phase 2: Spec Refinement (Gemini) | Complete |
+| Phase 3: Spec Critique (Codex) | Complete |
+| Phase 4: Spec Finalization (Claude) | Complete |
 | Phase 5: Implementation (Claude) | Not Started |
 | Phase 6: Post-Implementation Review | Not Started |
 
 ## Key Files
 
-- [IMPLEMENTATION_SPEC.md](IMPLEMENTATION_SPEC.md) — full implementation spec (draft)
+- [IMPLEMENTATION_SPEC.md](IMPLEMENTATION_SPEC.md) — full implementation spec (finalized)
+- [DECISIONS.md](DECISIONS.md) — accepted/rejected review findings
+- [spec-reviews/GEMINI.md](spec-reviews/GEMINI.md) — Gemini refinement review
+- [spec-reviews/CODEX.md](spec-reviews/CODEX.md) — Codex critique
 
 ## Dependencies
 
