@@ -6,7 +6,7 @@ This file is the project-level state tracker. Every agent session should read th
 
 ## Current State
 
-The first subscriber image (Alpine) is built. The shared entrypoint script supports all access methods and encapsulation types, with auto-detected DHCP client dispatch. The AI workflow has been refined with early branching, priority labels, spec approval gates, and a standardized PR format.
+Two subscriber images (Alpine and Debian) are built. The shared entrypoint script supports all access methods and encapsulation types, with auto-detected DHCP client dispatch for both dhcpcd and dhclient. The AI workflow has been refined with early branching, priority labels, spec approval gates, and a standardized PR format.
 
 ## Completed Specs
 
@@ -14,6 +14,7 @@ The first subscriber image (Alpine) is built. The shared entrypoint script suppo
 |------|-------|--------|---------|
 | [0-bootstrap](specs/0-bootstrap/) | N/A | Complete | AI workflow (PROCESS.md, CLAUDE.md), issue templates, README, contribution rules |
 | [1-alpine-subscriber-image](specs/1-alpine-subscriber-image/) | [#1](https://github.com/veesix-networks/bngtester/issues/1) | Complete | Alpine subscriber image + shared entrypoint (VLAN, IPoE, PPPoE) |
+| [3-debian-subscriber-image](specs/3-debian-subscriber-image/) | [#3](https://github.com/veesix-networks/bngtester/issues/3) | Complete | Debian 12 subscriber image + dhclient entrypoint fixes |
 
 ## Spec Dependencies
 
@@ -21,11 +22,14 @@ The first subscriber image (Alpine) is built. The shared entrypoint script suppo
 graph TD
     B[0-bootstrap<br/>AI workflow + project structure]
     A[1-alpine-subscriber-image<br/>Alpine image + shared entrypoint]
+    D[3-debian-subscriber-image<br/>Debian image + dhclient fixes]
 
     B --> A
+    A --> D
 
     style B fill:#2da44e,color:#fff
     style A fill:#2da44e,color:#fff
+    style D fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
@@ -48,6 +52,11 @@ Decisions that affect future specs. Read these before proposing new work.
 - **bng-client will replace the shell entrypoint.** The planned Rust binary handles VLAN setup, client management, and health reporting. The current entrypoint is the minimum viable approach.
 - **Subscriber containers require a dedicated network interface.** Default Docker bridge is not suitable. Use `--network none` + injected veth/macvlan, a dedicated Docker network, or `--network host`.
 
+### From 3-debian-subscriber-image
+
+- **dhclient requires config file for DHCP_TIMEOUT.** dhclient has no CLI flag for timeout — the entrypoint generates `/tmp/dhclient-bngtester.conf` with `timeout N;` and passes it via `-cf`. Future images using dhclient inherit this automatically.
+- **Debian images need `ca-certificates` and `netbase`.** `bookworm-slim` lacks CA certs (needed for curl HTTPS) and `/etc/protocols` + `/etc/services` (needed by networking tools). Future Debian-based images should include both.
+
 ### From 0-bootstrap
 
 - **Gemini produces review artifacts, not direct spec edits.** All review agents write to `spec-reviews/` — Claude is the only agent that modifies the spec itself (Phase 4).
@@ -59,7 +68,7 @@ Decisions that affect future specs. Read these before proposing new work.
 
 | Component | Exists | Notes |
 |-----------|--------|-------|
-| `images/` | Yes | Alpine image + shared entrypoint (`images/shared/entrypoint.sh`, `images/alpine/Dockerfile`) |
+| `images/` | Yes | Alpine + Debian images, shared entrypoint (`images/shared/entrypoint.sh`, `images/alpine/Dockerfile`, `images/debian/Dockerfile`) |
 | `collector/` | No | Go collector not started |
 | `.github/workflows/` | No | No CI pipelines yet |
 | `context/` | Yes | Workflow docs and bootstrap spec |
