@@ -117,7 +117,7 @@ The workflow uses a three-job pipeline to prevent partial publication:
 2. **build** — matrix job, builds all images with `push: false`. Uses `fail-fast: true`. If any image fails to build, the entire workflow fails here.
 3. **push** — matrix job, `needs: [discover, build]`. Only runs if **all** build legs succeeded. Builds and pushes each image.
 
-This ensures Docker Hub is never left in a partially-updated state from a failed workflow run. If a transient push failure occurs in the push job, re-running the workflow is the remediation.
+This ensures that build failures cannot cause partial publication — images are only pushed after all builds succeed. If a transient failure occurs during the push phase itself (e.g., Docker Hub rate limit, network timeout), some images may have already been pushed while others have not. Re-running the workflow is the remediation for this case.
 
 ## Configuration
 
