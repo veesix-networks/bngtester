@@ -2,7 +2,7 @@
 
 ## Overview
 
-GitHub Actions workflow that automatically builds all subscriber container images under `images/` and publishes them to Docker Hub. Triggers on pushes to `main` (tagged `latest`) and on semver tags (tagged with the version). This is the first CI pipeline in the repo and unblocks adding future subscriber images without manual build/push.
+GitHub Actions workflow that automatically builds all subscriber container images under `images/` and publishes them to Docker Hub. Triggers on pushes to `main` (tagged `latest`), on semver tags (tagged with the version), and on pull requests (build-only, no push). This is the first CI pipeline in the repo and unblocks adding future subscriber images without manual build/push.
 
 ## Source Issue
 
@@ -20,34 +20,62 @@ GitHub Actions workflow that automatically builds all subscriber container image
 
 ### Workflow Architecture
 
-A single workflow file handles all images using a matrix strategy. Each image in the matrix maps to a subdirectory under `images/` that contains a `Dockerfile`.
+A single workflow file with three jobs: **discover**, **build**, and **push**. The discover job dynamically finds all image directories. The build job validates all Dockerfiles compile. The push job publishes only after all builds succeed, preventing partial publication.
 
 ```
-Push to main ──┐
-               ├──> publish-images.yml ──> matrix [alpine, debian, ubuntu]
-Semver tag ────┘                              │
-                                              ├── build veesix/bngtester-alpine
-                                              ├── build veesix/bngtester-debian
-                                              └── build veesix/bngtester-ubuntu
+Event ──> discover ──> build (matrix) ──> push (matrix)
+                         │                   │
+                         ├── alpine ✓         ├── push alpine
+                         ├── debian ✓         ├── push debian
+                         └── ubuntu ✓         └── push ubuntu
+                         (all must pass)    (only if all builds passed)
 ```
+
+On `pull_request` events, only discover and build run (push is skipped). This validates Dockerfile changes before merge.
 
 ### Trigger Rules
 
-| Event | Condition | Image Tag |
-|-------|-----------|-----------|
-| Push to `main` | Any push (merge, direct push) | `latest` |
-| Tag push | Tag matches `v*` (e.g., `v0.1.0`, `v1.0.0-rc.1`) | Version from tag (e.g., `0.1.0`) |
+| Event | Condition | Image Tag | Pushes to Registry |
+|-------|-----------|-----------|-------------------|
+| Push to `main` | Any push (merge, direct push) | `latest` | Yes |
+| Tag push | Tag matches semver pattern (e.g., `v0.1.0`) | Version from tag (e.g., `0.1.0`) | Yes |
+| Pull request | Targets `main` | N/A | No (build-only) |
 
 ### Tag Strategy
 
-Uses `docker/metadata-action` to derive tags:
+Uses `docker/metadata-action` to derive tags with `type=semver` for strict semver parsing:
 
-- **On push to `main`:** Tag as `latest`
-- **On semver tag `v*`:** Tag as the semver version (e.g., `v0.1.0` → `0.1.0`), plus `latest`
+- **On push to `main`:** Tag as `latest` only
+- **On semver tag:** Tag as the semver version (e.g., `v0.1.0` → `0.1.0`). Does **not** update `latest` — `latest` strictly follows `main`
+- **On pull request:** No tags pushed (build-only validation)
+
+Non-semver tags (e.g., `vnext`, `vfoo`) do not match `type=semver` and produce no tags, so no images are pushed.
+
+### Dynamic Image Discovery
+
+The workflow does not hardcode the image list. A discover job finds all directories under `images/` that contain a `Dockerfile`, excluding `shared/`:
+
+```yaml
+discover:
+  steps:
+    - id: find
+      run: |
+        images=$(find images -name Dockerfile -mindepth 2 -maxdepth 2 \
+          | xargs -I{} dirname {} | xargs -I{} basename {} \
+          | grep -v '^shared$' \
+          | jq -Rcn '[inputs]')
+        echo "images=$images" >> "$GITHUB_OUTPUT"
+```
+
+The build and push jobs consume this as `matrix.image: ${{ fromJson(needs.discover.outputs.images) }}`. Adding a new subscriber image only requires adding its `images/<distro>/Dockerfile` — the workflow picks it up automatically.
 
 ### Image Naming
 
-Each image is published as `veesix/bngtester-<distro>`:
+Each image is published as `veesix/bngtester-<distro>`. The `docker/metadata-action` `images` input is set per matrix iteration:
+
+```yaml
+images: veesix/bngtester-${{ matrix.image }}
+```
 
 | Directory | Docker Hub Image |
 |-----------|-----------------|
@@ -64,9 +92,32 @@ context: images/
 file: images/${{ matrix.image }}/Dockerfile
 ```
 
+### Platform
+
+Builds target `linux/amd64` explicitly via `platforms: linux/amd64` in the build-push-action. This encodes the amd64-only scope boundary rather than relying on the implicit runner architecture.
+
+### Build Caching
+
+Uses GitHub Actions cache backend for Docker layer caching:
+
+```yaml
+cache-from: type=gha
+cache-to: type=gha,mode=max
+```
+
+### OCI Labels
+
+`docker/metadata-action` automatically injects standard OCI labels (`org.opencontainers.image.source`, `org.opencontainers.image.revision`, `org.opencontainers.image.created`, etc.) from the GitHub context. The `labels` output is passed to `docker/build-push-action`.
+
 ### Failure Behavior
 
-The matrix strategy uses `fail-fast: true` (default). If any image fails to build, the entire workflow fails. This matches the acceptance criteria: "Build fails if any Dockerfile fails to build."
+The workflow uses a three-job pipeline to prevent partial publication:
+
+1. **discover** — finds image directories
+2. **build** — matrix job, builds all images with `push: false`. Uses `fail-fast: true`. If any image fails to build, the entire workflow fails here.
+3. **push** — matrix job, `needs: [discover, build]`. Only runs if **all** build legs succeeded. Builds and pushes each image.
+
+This ensures Docker Hub is never left in a partially-updated state from a failed workflow run. If a transient push failure occurs in the push job, re-running the workflow is the remediation.
 
 ## Configuration
 
@@ -90,6 +141,7 @@ The workflow does not introduce any new environment variables for local developm
 | `.github/workflows/publish-images.yml` | Create | GitHub Actions workflow for building and publishing images |
 | `context/specs/2-ci-publish-dockerhub/IMPLEMENTATION_SPEC.md` | Create | This spec |
 | `context/specs/2-ci-publish-dockerhub/README.md` | Create | Status tracker |
+| `context/specs/2-ci-publish-dockerhub/DECISIONS.md` | Create | Review decision log |
 
 ## Implementation Order
 
@@ -97,15 +149,13 @@ The workflow does not introduce any new environment variables for local developm
 
 Create `.github/workflows/publish-images.yml` with:
 
-1. Trigger configuration (`push` to `main`, tag `v*`)
-2. Matrix strategy listing all three images
-3. Steps:
-   - Checkout repository
-   - Set up Docker Buildx
-   - Log in to Docker Hub using repository secrets
-   - Extract metadata (tags, labels) using `docker/metadata-action`
-   - Build and push using `docker/build-push-action`
-4. SPDX copyright header
+1. Trigger configuration (`push` to `main`, semver tags, `pull_request` to `main`)
+2. Discover job — dynamic image directory discovery
+3. Build job — matrix build with `push: false`, `platforms: linux/amd64`, GHA caching
+4. Push job — matrix build+push, `needs: [discover, build]`, skipped on PRs
+5. `docker/metadata-action` with `images: veesix/bngtester-${{ matrix.image }}`, `type=semver` tags, OCI labels
+6. Docker Hub login using repository secrets
+7. SPDX copyright header
 
 This is a single logical unit — the workflow file is self-contained and independently testable.
 
@@ -119,16 +169,18 @@ After merging to `main`, the workflow triggers automatically. Manual verificatio
 
 ## Testing
 
-- **Build validation:** Push to `main` or create a tag — the workflow runs automatically
-- **Tag validation:** Create a tag `v0.1.0` and verify images are tagged `0.1.0` on Docker Hub
-- **Failure validation:** Introduce a deliberate Dockerfile error and verify the workflow fails
+- **PR validation:** Open a PR that touches a Dockerfile — the workflow should build but not push
+- **Build validation:** Push to `main` — the workflow runs and publishes `latest` tags
+- **Tag validation:** Create a tag `v0.1.0` and verify images are tagged `0.1.0` on Docker Hub (but `latest` is not updated)
+- **Non-semver tag:** Push a tag like `vnext` and verify no images are published
+- **Failure validation:** Introduce a deliberate Dockerfile error and verify the workflow fails at the build stage without publishing any images
+- **New image discovery:** Add a new `images/<distro>/Dockerfile` and verify the workflow picks it up without editing the workflow file
 - **Local build test:** Each Dockerfile can be built locally with `docker build -f images/<distro>/Dockerfile images/` to verify before CI
 
 ## Not In Scope
 
-- Multi-arch builds (amd64 only, per issue)
+- Multi-arch builds (amd64 only, per issue — encoded via `platforms: linux/amd64`)
 - Collector binary builds
 - Image signing or attestation
 - Automated testing of built images (run containers, verify connectivity)
-- Build caching optimization (can be added later if build times are a concern)
 - Path-based triggering (only build images whose Dockerfiles changed) — all images build on every trigger for simplicity
