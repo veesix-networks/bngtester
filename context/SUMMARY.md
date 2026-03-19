@@ -6,7 +6,7 @@ This file is the project-level state tracker. Every agent session should read th
 
 ## Current State
 
-Three subscriber images (Alpine, Debian, and Ubuntu) are built. The shared entrypoint script supports all access methods and encapsulation types, with auto-detected DHCP client dispatch for both dhcpcd and dhclient. The AI workflow has been refined with early branching, priority labels, spec approval gates, and a standardized PR format.
+Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to Docker Hub via a CI pipeline. The shared entrypoint script supports all access methods and encapsulation types, with auto-detected DHCP client dispatch for both dhcpcd and dhclient. The AI workflow has been refined with early branching, priority labels, spec approval gates, and a standardized PR format.
 
 ## Completed Specs
 
@@ -16,6 +16,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built. The shared entry
 | [1-alpine-subscriber-image](specs/1-alpine-subscriber-image/) | [#1](https://github.com/veesix-networks/bngtester/issues/1) | Complete | Alpine subscriber image + shared entrypoint (VLAN, IPoE, PPPoE) |
 | [3-debian-subscriber-image](specs/3-debian-subscriber-image/) | [#3](https://github.com/veesix-networks/bngtester/issues/3) | Complete | Debian 12 subscriber image + dhclient entrypoint fixes |
 | [4-ubuntu-subscriber-image](specs/4-ubuntu-subscriber-image/) | [#4](https://github.com/veesix-networks/bngtester/issues/4) | Complete | Ubuntu 22.04 subscriber image (Dockerfile only, no entrypoint changes) |
+| [2-ci-publish-dockerhub](specs/2-ci-publish-dockerhub/) | [#2](https://github.com/veesix-networks/bngtester/issues/2) | Complete | CI pipeline to build and publish subscriber images to Docker Hub |
 
 ## Spec Dependencies
 
@@ -25,16 +26,21 @@ graph TD
     A[1-alpine-subscriber-image<br/>Alpine image + shared entrypoint]
     D[3-debian-subscriber-image<br/>Debian image + dhclient fixes]
     U[4-ubuntu-subscriber-image<br/>Ubuntu image]
+    CI[2-ci-publish-dockerhub<br/>CI pipeline to Docker Hub]
 
     B --> A
     A --> D
     A --> U
     D --> U
+    A --> CI
+    D --> CI
+    U --> CI
 
     style B fill:#2da44e,color:#fff
     style A fill:#2da44e,color:#fff
     style D fill:#2da44e,color:#fff
     style U fill:#2da44e,color:#fff
+    style CI fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
@@ -67,6 +73,14 @@ Decisions that affect future specs. Read these before proposing new work.
 - **Ubuntu ships `timeout 300;` in stock dhclient.conf.** The entrypoint's `generate_dhclient_conf()` handles this correctly by appending `timeout $DHCP_TIMEOUT;` at the end of the copied config — dhclient uses the last directive. Future dhclient-based images should verify their stock config for conflicting directives.
 - **`DEBIAN_FRONTEND=noninteractive` for Ubuntu Dockerfiles.** Ubuntu's apt may trigger interactive prompts during package installation. Use `DEBIAN_FRONTEND=noninteractive` inline in the RUN command.
 
+### From 2-ci-publish-dockerhub
+
+- **Three-job pipeline: discover → build → push.** The push job only runs after all build legs succeed, preventing partial Docker Hub publication. The build job validates Dockerfiles without pushing.
+- **Dynamic image discovery.** The workflow finds `images/*/Dockerfile` directories automatically. Adding a new subscriber image requires only its Dockerfile — no workflow edits needed.
+- **`latest` strictly follows `main`.** Semver tags publish version tags only. `latest` is never updated by tag events.
+- **PR trigger for build-only validation.** Pull requests targeting `main` run the build job without pushing, catching Dockerfile errors before merge.
+- **Docker Hub secrets required.** `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` must be configured in repository settings.
+
 ### From 0-bootstrap
 
 - **Gemini produces review artifacts, not direct spec edits.** All review agents write to `spec-reviews/` — Claude is the only agent that modifies the spec itself (Phase 4).
@@ -80,6 +94,6 @@ Decisions that affect future specs. Read these before proposing new work.
 |-----------|--------|-------|
 | `images/` | Yes | Alpine + Debian + Ubuntu images, shared entrypoint (`images/shared/entrypoint.sh`, `images/alpine/Dockerfile`, `images/debian/Dockerfile`, `images/ubuntu/Dockerfile`) |
 | `collector/` | No | Go collector not started |
-| `.github/workflows/` | No | No CI pipelines yet |
+| `.github/workflows/` | Yes | `publish-images.yml` — builds and publishes subscriber images to Docker Hub |
 | `context/` | Yes | Workflow docs and bootstrap spec |
 | `.github/ISSUE_TEMPLATE/` | Yes | Feature, bug, enhancement, testing templates |
