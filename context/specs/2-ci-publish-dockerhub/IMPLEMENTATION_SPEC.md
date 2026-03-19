@@ -13,8 +13,8 @@ GitHub Actions workflow that automatically builds all subscriber container image
 - Three subscriber images exist: `images/alpine/`, `images/debian/`, `images/ubuntu/`
 - All Dockerfiles use a shared build context of `images/` (e.g., `docker build -f images/alpine/Dockerfile images/`) to access `images/shared/entrypoint.sh`
 - No CI pipelines exist — `.github/workflows/` directory does not exist
-- Docker Hub organization is `veesix`
-- Naming convention from the issue: `veesix/bngtester-<image-name>` (e.g., `veesix/bngtester-alpine`)
+- Docker Hub account is `veesixnetworks`, repository is `bngtester`
+- Naming convention: `veesixnetworks/bngtester:<distro>-<tag>` (e.g., `veesixnetworks/bngtester:alpine-latest`)
 
 ## Design
 
@@ -37,16 +37,16 @@ On `pull_request` events, only discover and build run (push is skipped). This va
 
 | Event | Condition | Image Tag | Pushes to Registry |
 |-------|-----------|-----------|-------------------|
-| Push to `main` | Any push (merge, direct push) | `latest` | Yes |
-| Tag push | Tag matches semver pattern (e.g., `v0.1.0`) | Version from tag (e.g., `0.1.0`) | Yes |
+| Push to `main` | Any push (merge, direct push) | `<distro>-latest` | Yes |
+| Tag push | Tag matches semver pattern (e.g., `v0.1.0`) | `<distro>-<version>` (e.g., `alpine-0.1.0`) | Yes |
 | Pull request | Targets `main` | N/A | No (build-only) |
 
 ### Tag Strategy
 
 Uses `docker/metadata-action` to derive tags with `type=semver` for strict semver parsing:
 
-- **On push to `main`:** Tag as `latest` only
-- **On semver tag:** Tag as the semver version (e.g., `v0.1.0` → `0.1.0`). Does **not** update `latest` — `latest` strictly follows `main`
+- **On push to `main`:** Tag as `<distro>-latest` (e.g., `alpine-latest`)
+- **On semver tag:** Tag as `<distro>-<version>` (e.g., `alpine-0.1.0`). Does **not** update `latest` — `latest` strictly follows `main`
 - **On pull request:** No tags pushed (build-only validation)
 
 Non-semver tags (e.g., `vnext`, `vfoo`) do not match `type=semver` and produce no tags, so no images are pushed.
@@ -71,17 +71,20 @@ The build and push jobs consume this as `matrix.image: ${{ fromJson(needs.discov
 
 ### Image Naming
 
-Each image is published as `veesix/bngtester-<distro>`. The `docker/metadata-action` `images` input is set per matrix iteration:
+All images are published to a single Docker Hub repository `veesixnetworks/bngtester`. The OS is encoded in the tag, not the image name:
 
 ```yaml
-images: veesix/bngtester-${{ matrix.image }}
+images: veesixnetworks/bngtester
+tags: |
+  type=raw,value=${{ matrix.image }}-latest,enable={{is_default_branch}}
+  type=semver,pattern=${{ matrix.image }}-{{version}}
 ```
 
-| Directory | Docker Hub Image |
-|-----------|-----------------|
-| `images/alpine/` | `veesix/bngtester-alpine` |
-| `images/debian/` | `veesix/bngtester-debian` |
-| `images/ubuntu/` | `veesix/bngtester-ubuntu` |
+| Directory | Docker Hub Tag (main) | Docker Hub Tag (semver) |
+|-----------|----------------------|------------------------|
+| `images/alpine/` | `veesixnetworks/bngtester:alpine-latest` | `veesixnetworks/bngtester:alpine-0.1.0` |
+| `images/debian/` | `veesixnetworks/bngtester:debian-latest` | `veesixnetworks/bngtester:debian-0.1.0` |
+| `images/ubuntu/` | `veesixnetworks/bngtester:ubuntu-latest` | `veesixnetworks/bngtester:ubuntu-0.1.0` |
 
 ### Build Context
 
