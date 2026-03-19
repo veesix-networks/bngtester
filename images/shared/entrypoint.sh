@@ -44,6 +44,9 @@ cleanup() {
     fi
     CLIENT_PID=""
 
+    # Remove generated dhclient config
+    rm -f /tmp/dhclient-bngtester.conf
+
     # Remove VLAN interfaces in reverse creation order
     case "$ENCAP" in
         qinq)
@@ -197,7 +200,12 @@ detect_dhcp_client() {
 
 # --- dhclient config generation ---
 generate_dhclient_conf() {
-    printf 'timeout %s;\n' "$DHCP_TIMEOUT" > /tmp/dhclient-bngtester.conf
+    if [ -f /etc/dhcp/dhclient.conf ]; then
+        cp /etc/dhcp/dhclient.conf /tmp/dhclient-bngtester.conf
+    else
+        : > /tmp/dhclient-bngtester.conf
+    fi
+    printf 'timeout %s;\n' "$DHCP_TIMEOUT" >> /tmp/dhclient-bngtester.conf
 }
 
 # --- Dispatch Functions ---
