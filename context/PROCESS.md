@@ -82,19 +82,22 @@ This convention is deterministic — any agent can derive the path from the issu
 - **Invocation:** Human gives Claude the issue reference:
   > Read context/PROCESS.md and execute Phase 1 for issue #N.
 - **Input:** Claude reads the issue via `gh issue view <number>` + reads `context/SUMMARY.md` for project state + reads the existing codebase
+- **Branch:** Create a feature branch from `main` before any file edits: `git checkout main && git pull && git checkout -b <type>/<scope>-<description>`. The branch prefix matches the commit type (e.g., `feat/`, `fix/`, `test/`, `docs/`). Never edit files on `main` directly. All work for this issue — spec artifacts, review files, and code — lives on this branch.
 - **Output:**
   - `context/specs/<issue-number>-<slug>/IMPLEMENTATION_SPEC.md`
   - `context/specs/<issue-number>-<slug>/README.md` (status tracker — see format below)
 - **The spec MUST reference the source issue number.**
 - Claude derives everything from the issue — do not ask the human to re-explain what is already in the issue.
-- Claude MUST generate ready-to-paste prompts for all subsequent agents at the end of Phase 1 (see Agent Invocation Prompts below).
+- Claude MUST generate ready-to-paste prompts for all subsequent agents at the end of Phase 1 (see Agent Invocation Prompts below). These prompts MUST include the branch name so review agents check out the correct branch.
 - **README update:** Create the README with Phase 1 marked as Complete, all other phases as Not Started or Skipped. Include upstream/downstream dependencies.
+- **Push:** Push the branch after committing spec artifacts so review agents and humans can access them.
 - **Why Claude:** Direct codebase access means the spec is grounded in real code — real file paths, existing patterns, concrete file plan.
 
 ### Phase 2: Spec Refinement (Gemini) — optional
 
 - **Invocation:** Human pastes the Gemini prompt generated at the end of Phase 1.
-  > Read context/PROCESS.md for the workflow. Review the spec at context/specs/<issue-number>-<slug>/IMPLEMENTATION_SPEC.md. Write findings to context/specs/<issue-number>-<slug>/spec-reviews/GEMINI.md.
+  > Read context/PROCESS.md for the workflow. Check out branch `<type>/<scope>-<description>`. Review the spec at context/specs/<issue-number>-<slug>/IMPLEMENTATION_SPEC.md. Write findings to context/specs/<issue-number>-<slug>/spec-reviews/GEMINI.md.
+- **Branch:** Check out the branch created in Phase 1. Commit review artifacts to the same branch.
 - **Input:** `IMPLEMENTATION_SPEC.md`
 - **Output:** `context/specs/<issue-number>-<slug>/spec-reviews/GEMINI.md` — a review artifact with suggested changes, corrections, and missing requirements. **Gemini does NOT edit the spec directly.**
 - **Why Gemini:** Large context window excels at cross-referencing the full spec against best practices and catching inconsistencies.
@@ -104,7 +107,8 @@ This convention is deterministic — any agent can derive the path from the issu
 ### Phase 3: Spec Critique (Codex) — optional
 
 - **Invocation:** Human pastes the Codex prompt generated at the end of Phase 1.
-  > Read context/PROCESS.md for the workflow. Critique the spec at context/specs/<issue-number>-<slug>/IMPLEMENTATION_SPEC.md. Write findings to context/specs/<issue-number>-<slug>/spec-reviews/CODEX.md.
+  > Read context/PROCESS.md for the workflow. Check out branch `<type>/<scope>-<description>`. Critique the spec at context/specs/<issue-number>-<slug>/IMPLEMENTATION_SPEC.md. Write findings to context/specs/<issue-number>-<slug>/spec-reviews/CODEX.md.
+- **Branch:** Check out the branch created in Phase 1. Commit review artifacts to the same branch.
 - **Input:** `IMPLEMENTATION_SPEC.md` (same version as Phase 2 — both review the Phase 1 draft) + codebase
 - **Output:** `context/specs/<issue-number>-<slug>/spec-reviews/CODEX.md`
 - **Focus:** Architectural gaps, missing edge cases, failure modes, scope issues
@@ -130,7 +134,7 @@ This convention is deterministic — any agent can derive the path from the issu
 
 #### Implementation Rules
 
-1. **Branch before any edits.** Create a feature branch from `main`: `git checkout main && git pull && git checkout -b <type>/<scope>-<description>`. The branch prefix matches the commit type (e.g., `feat/`, `fix/`, `test/`). Never edit files on `main` directly.
+1. **Use the existing branch.** The feature branch was created in Phase 1. Check it out if not already on it. Do not create a new branch.
 2. **One commit per logical unit.** Each implementation sub-phase gets its own commit as the work is done.
 3. **Commit message provided immediately.** After completing each unit, provide the conventional commit message, file list, and any context.
 
