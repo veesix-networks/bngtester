@@ -1,0 +1,48 @@
+name: Testing
+description: New test scenario or test infrastructure
+labels: ["testing"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Testing issues cover new test scenarios, test infrastructure, or validation methodology. These go through the [AI workflow](../../context/PROCESS.md).
+  - type: textarea
+    id: description
+    attributes:
+      label: What
+      description: What test scenario or infrastructure do you want?
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why
+      description: What gap does this fill? What does it validate?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: How do we know the tests are correct and complete?
+    validations:
+      required: true
+  - type: textarea
+    id: scope-boundary
+    attributes:
+      label: Not in scope
+      description: What is explicitly NOT part of this issue?
+    validations:
+      required: true
+  - type: dropdown
+    id: agents
+    attributes:
+      label: Workflow agents
+      description: Which agents should review the spec? Select one option.
+      options:
+        - Claude only
+        - Claude + Gemini
+        - Claude + Codex
+        - All three (Claude + Gemini + Codex)
+    validations:
+      required: true

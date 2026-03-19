@@ -1,0 +1,48 @@
+name: Enhancement
+description: Improve an existing feature
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Enhancements modify existing functionality. For entirely new capabilities, use the **Feature** template instead. Non-trivial enhancements go through the [AI workflow](../../context/PROCESS.md).
+  - type: textarea
+    id: description
+    attributes:
+      label: What
+      description: What specific improvement do you want?
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why
+      description: What problem does this solve or what does it improve?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: How do we know this is done?
+    validations:
+      required: true
+  - type: textarea
+    id: scope-boundary
+    attributes:
+      label: Not in scope
+      description: What is explicitly NOT part of this issue?
+    validations:
+      required: true
+  - type: dropdown
+    id: agents
+    attributes:
+      label: Workflow agents
+      description: Which agents should review the spec? Select one option.
+      options:
+        - Claude only
+        - Claude + Gemini
+        - Claude + Codex
+        - All three (Claude + Gemini + Codex)
+    validations:
+      required: true
