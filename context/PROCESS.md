@@ -240,12 +240,41 @@ Required content:
 - **Dependencies** — upstream specs this depends on + downstream specs that depend on this
 - **Prompt to Resume** — ready-to-paste prompt for continuing in a new session (must reference `context/SUMMARY.md` first)
 
+## Labels
+
+Labels track workflow state and agent configuration. These are the contract that n8n (or any future automation) keys off.
+
+### Workflow State Labels
+
+| Label | Applied When | Removed When |
+|-------|-------------|--------------|
+| `approved` | Human approves the issue for work | Never (stays for audit) |
+| `phase:spec` | Phase 1 starts | Phase 4 completes (or Phase 1 if no review) |
+| `phase:review` | Phase 2 or 3 starts | Phase 4 completes |
+| `phase:implementation` | Phase 5 starts | Phase 5 completes |
+| `phase:done` | All phases complete + PR merged | Never |
+
+### Agent Selection Labels
+
+| Label | Meaning |
+|-------|---------|
+| `agents:claude-only` | Phases 2, 3 skipped |
+| `agents:claude-gemini` | Phase 3 skipped |
+| `agents:claude-codex` | Phase 2 skipped |
+| `agents:all-three` | Full pipeline |
+
+The agent label is applied based on the "Workflow agents" dropdown selection in the issue template. Today this is manual — the human adds the label after creating the issue. When n8n is implemented, it will read the dropdown value and apply the label automatically.
+
+### Issue Type Labels
+
+Auto-applied by issue templates: `feature`, `bug`, `enhancement`, `testing`.
+
 ## Approval State
 
 - **Issue approval:** The `approved` label on the GitHub issue signals that work can begin. No label = no work.
 - **Spec review approval:** The human communicates accept/reject decisions to Claude in conversation during Phase 4. These are recorded durably in `DECISIONS.md`.
 - **Implementation approval:** Standard PR review and merge process.
-- **Phase status:** Tracked in the spec `README.md` status table. This is the durable record of where the workflow stands.
+- **Phase status:** Tracked in the spec `README.md` status table and the issue's phase labels. Both must stay in sync.
 
 ## Severity Scale
 
