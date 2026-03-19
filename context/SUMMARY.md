@@ -6,7 +6,7 @@ This file is the project-level state tracker. Every agent session should read th
 
 ## Current State
 
-The first subscriber image (Alpine) is built. The shared entrypoint script supports all access methods and encapsulation types, with auto-detected DHCP client dispatch.
+The first subscriber image (Alpine) is built. The shared entrypoint script supports all access methods and encapsulation types, with auto-detected DHCP client dispatch. The AI workflow has been refined with early branching, priority labels, spec approval gates, and a standardized PR format.
 
 ## Completed Specs
 
@@ -33,6 +33,13 @@ Legend: green = complete, blue = in progress, grey = planned
 ## Key Decisions
 
 Decisions that affect future specs. Read these before proposing new work.
+
+### From #8, #9, #10, #11 (workflow improvements)
+
+- **Branch at Phase 1, not Phase 5.** All work for an issue — spec artifacts, reviews, and code — lives on a single feature branch from the start. Review agents check out the branch.
+- **Priority labels decouple order from issue number.** `priority:p0` (critical path), `priority:p1` (important), `priority:p2` (nice to have). All issue templates have a priority dropdown.
+- **Spec approval gate between Phase 4 and Phase 5.** `spec:approved` label required before implementation. Human contributors open a draft PR for spec review. n8n auto-approves when no unresolved CRITICAL/HIGH findings.
+- **PR creation is a required final step of Phase 5.** Conventional Commits title format. Standardized body template with summary, spec link, files, testing. Agent-agnostic attribution.
 
 ### From 1-alpine-subscriber-image
 
