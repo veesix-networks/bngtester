@@ -144,6 +144,43 @@ Any combination of agents can review the completed code:
 - **Codex — Spec Compliance:** Did we build what the spec says? What's missing? What drifted? Narrative format. Output: `context/specs/<issue-number>-<slug>/code-reviews/CODEX.md`
 - **Gemini — Best Practices:** Dockerfile best practices, CI correctness, Go idioms, security review. Checklist format. Output: `context/specs/<issue-number>-<slug>/code-reviews/GEMINI.md`
 
+## Amendments
+
+A human can intervene at any point in the workflow to change requirements. This is expected — requirements evolve as you learn.
+
+### Before a spec exists (Phase 0 or early Phase 1)
+
+Edit the issue body directly. The issue is the source of truth and no spec exists yet, so there's nothing to reconcile.
+
+### After a spec exists (Phases 1-4)
+
+1. **Human comments on the issue** describing the amendment — what changed and why. This comment is the audit trail.
+2. **The current phase pauses.**
+3. **Claude reads the amendment comment**, updates the spec inline, and adds an entry to `DECISIONS.md`:
+
+```markdown
+### <amendment title>
+- **Source:** AMENDMENT (human intervention)
+- **Phase:** <phase when amendment occurred>
+- **Resolution:** <what was changed in the spec>
+```
+
+4. **If Phases 2-3 already produced reviews:** The amended sections get a targeted re-review. Agents review only the changed sections, not the full spec. Previous review artifacts are preserved — new findings are appended.
+5. **If only Phase 1 completed:** No re-review needed unless the human requests it.
+6. **Workflow resumes** from where it paused.
+
+### During implementation (Phase 5)
+
+1. **Human comments on the issue or PR** describing the change.
+2. **Claude updates the spec**, adds an `AMENDMENT` entry to `DECISIONS.md`, and adjusts the implementation.
+3. **No re-review unless the human requests it.** The amendment is captured in the PR diff and reviewed at merge time.
+
+### Rules
+
+- Amendments must stay within the original issue's scope boundary. If the amendment is actually a new feature, file a new issue.
+- The amendment comment on the issue is the audit trail. Do not amend via conversation alone.
+- Git history preserves previous spec versions. Overwriting is fine.
+
 ## Rework and Rejection
 
 Reviews are iterative. When a reviewer flags issues:
