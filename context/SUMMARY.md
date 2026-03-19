@@ -6,21 +6,26 @@ This file is the project-level state tracker. Every agent session should read th
 
 ## Current State
 
-Nothing is built yet. The AI workflow, issue templates, and project structure are in place. Implementation starts from filed issues.
+The first subscriber image (Alpine) is built. The shared entrypoint script supports all access methods and encapsulation types, with auto-detected DHCP client dispatch.
 
 ## Completed Specs
 
 | Spec | Issue | Status | Summary |
 |------|-------|--------|---------|
 | [0-bootstrap](specs/0-bootstrap/) | N/A | Complete | AI workflow (PROCESS.md, CLAUDE.md), issue templates, README, contribution rules |
+| [1-alpine-subscriber-image](specs/1-alpine-subscriber-image/) | [#1](https://github.com/veesix-networks/bngtester/issues/1) | Complete | Alpine subscriber image + shared entrypoint (VLAN, IPoE, PPPoE) |
 
 ## Spec Dependencies
 
 ```mermaid
 graph TD
     B[0-bootstrap<br/>AI workflow + project structure]
+    A[1-alpine-subscriber-image<br/>Alpine image + shared entrypoint]
+
+    B --> A
 
     style B fill:#2da44e,color:#fff
+    style A fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
@@ -28,6 +33,13 @@ Legend: green = complete, blue = in progress, grey = planned
 ## Key Decisions
 
 Decisions that affect future specs. Read these before proposing new work.
+
+### From 1-alpine-subscriber-image
+
+- **Shared entrypoint auto-detects DHCP client.** `images/shared/entrypoint.sh` uses `command -v dhcpcd` / `command -v dhclient` at runtime. Future images (Debian, Ubuntu) use the same script — no per-image entrypoints needed.
+- **Build context is `images/`, not per-image.** All Dockerfiles use `docker build -f images/<distro>/Dockerfile images/` so they can COPY from `shared/`.
+- **bng-client will replace the shell entrypoint.** The planned Rust binary handles VLAN setup, client management, and health reporting. The current entrypoint is the minimum viable approach.
+- **Subscriber containers require a dedicated network interface.** Default Docker bridge is not suitable. Use `--network none` + injected veth/macvlan, a dedicated Docker network, or `--network host`.
 
 ### From 0-bootstrap
 
@@ -40,7 +52,7 @@ Decisions that affect future specs. Read these before proposing new work.
 
 | Component | Exists | Notes |
 |-----------|--------|-------|
-| `images/` | No | No subscriber images built yet |
+| `images/` | Yes | Alpine image + shared entrypoint (`images/shared/entrypoint.sh`, `images/alpine/Dockerfile`) |
 | `collector/` | No | Go collector not started |
 | `.github/workflows/` | No | No CI pipelines yet |
 | `context/` | Yes | Workflow docs and bootstrap spec |
