@@ -99,6 +99,7 @@ This convention is deterministic — any agent can derive the path from the issu
 - **Invocation:** Human pastes the Gemini prompt generated at the end of Phase 1.
   > Read context/PROCESS.md for the workflow. Check out branch `<type>/<scope>-<description>`. Review the spec at context/specs/<issue-number>-<slug>/IMPLEMENTATION_SPEC.md. Write findings to context/specs/<issue-number>-<slug>/spec-reviews/GEMINI.md.
 - **Branch:** Check out the branch created in Phase 1. Commit review artifacts to the same branch.
+- **Commit and push:** After writing the review file, you MUST commit it and push to the remote branch before completing your session. Review artifacts that are not committed and pushed are effectively lost. Use a conventional commit message: `docs(review): add Gemini spec review for <slug> (#<issue-number>)`.
 - **Input:** `IMPLEMENTATION_SPEC.md`
 - **Output:** `context/specs/<issue-number>-<slug>/spec-reviews/GEMINI.md` — a review artifact with suggested changes, corrections, and missing requirements. **Gemini does NOT edit the spec directly.**
 - **Why Gemini:** Large context window excels at cross-referencing the full spec against best practices and catching inconsistencies.
@@ -110,6 +111,7 @@ This convention is deterministic — any agent can derive the path from the issu
 - **Invocation:** Human pastes the Codex prompt generated at the end of Phase 1.
   > Read context/PROCESS.md for the workflow. Check out branch `<type>/<scope>-<description>`. Critique the spec at context/specs/<issue-number>-<slug>/IMPLEMENTATION_SPEC.md. Write findings to context/specs/<issue-number>-<slug>/spec-reviews/CODEX.md.
 - **Branch:** Check out the branch created in Phase 1. Commit review artifacts to the same branch.
+- **Commit and push:** After writing the review file, you MUST commit it and push to the remote branch before completing your session. Review artifacts that are not committed and pushed are effectively lost. Use a conventional commit message: `docs(review): add Codex spec critique for <slug> (#<issue-number>)`.
 - **Input:** `IMPLEMENTATION_SPEC.md` (same version as Phase 2 — both review the Phase 1 draft) + codebase
 - **Output:** `context/specs/<issue-number>-<slug>/spec-reviews/CODEX.md`
 - **Focus:** Architectural gaps, missing edge cases, failure modes, scope issues
@@ -195,6 +197,8 @@ Any combination of agents can review the completed code:
 - **Claude — Bug Hunter:** Line-level bugs, race conditions, resource leaks, security, error handling. Severity-rated table format. Output: `context/specs/<issue-number>-<slug>/code-reviews/CLAUDE.md`
 - **Codex — Spec Compliance:** Did we build what the spec says? What's missing? What drifted? Narrative format. Output: `context/specs/<issue-number>-<slug>/code-reviews/CODEX.md`
 - **Gemini — Best Practices:** Dockerfile best practices, CI correctness, Go idioms, security review. Checklist format. Output: `context/specs/<issue-number>-<slug>/code-reviews/GEMINI.md`
+
+**Commit and push:** Every agent participating in Phase 6 MUST commit their review file and push to the remote branch before completing their session. Review artifacts that are not committed and pushed are effectively lost. Use a conventional commit message: `docs(code-review): add <agent> review for <slug> (#<issue-number>)`.
 
 ## Amendments
 
