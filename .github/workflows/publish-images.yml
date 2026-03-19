@@ -1,0 +1,97 @@
+# Copyright The bngtester Authors
+# Licensed under the GNU General Public License v3.0 or later.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Publish Subscriber Images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.find.outputs.images }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: find
+        run: |
+          images=$(find images -name Dockerfile -mindepth 2 -maxdepth 2 \
+            | xargs -I{} dirname {} | xargs -I{} basename {} \
+            | grep -v '^shared$' \
+            | sort \
+            | jq -Rcn '[inputs]')
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [discover]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        image: ${{ fromJson(needs.discover.outputs.images) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: veesix/bngtester-${{ matrix.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: images/
+          file: images/${{ matrix.image }}/Dockerfile
+          platforms: linux/amd64
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  push:
+    if: github.event_name != 'pull_request'
+    needs: [discover, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        image: ${{ fromJson(needs.discover.outputs.images) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: veesix/bngtester-${{ matrix.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: images/
+          file: images/${{ matrix.image }}/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
