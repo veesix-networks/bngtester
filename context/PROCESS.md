@@ -125,8 +125,17 @@ This convention is deterministic — any agent can derive the path from the issu
 - **README update:** Mark Phases 2-4 status. Update Key Files with links to DECISIONS.md and review artifacts.
 - **Skip when:** Phases 2 and 3 were both skipped — the Phase 1 draft is the final spec.
 
+### Spec Approval Gate (between Phase 4 and Phase 5)
+
+Before implementation begins, the finalized spec must be approved:
+
+- **For human contributors:** Push the branch with spec artifacts, open a draft PR. A maintainer reviews the spec and adds the `spec:approved` label. Implementation does not begin until the label is present.
+- **For n8n automation:** Auto-approve if Phase 2/3 reviews found no unresolved CRITICAL or HIGH findings. Apply `spec:approved` automatically.
+- **For `claude-only` issues or when the human is driving the session directly:** The human's instruction to proceed to Phase 5 is implicit approval. Apply `spec:approved` and continue.
+
 ### Phase 5: Implementation (Claude)
 
+- **Gate:** The `spec:approved` label must be present on the issue (see Spec Approval Gate above).
 - **Output:** Code committed to the repo
 - **PR references the source issue** (e.g., `Closes #N`).
 - After completing implementation, Claude MUST ask the human whether they want Phase 6 (post-implementation review) and with which agents.
@@ -293,6 +302,7 @@ Labels track workflow state and agent configuration. These are the contract that
 | `approved` | Human approves the issue for work | Never (stays for audit) |
 | `phase:spec` | Phase 1 starts | Phase 4 completes (or Phase 1 if no review) |
 | `phase:review` | Phase 2 or 3 starts | Phase 4 completes |
+| `spec:approved` | Spec finalization complete + approved for implementation | Never (stays for audit) |
 | `phase:implementation` | Phase 5 starts | Phase 5 completes |
 | `phase:done` | All phases complete + PR merged | Never |
 
@@ -323,8 +333,9 @@ Auto-applied by issue templates: `feature`, `bug`, `enhancement`, `testing`.
 
 ## Approval State
 
-- **Issue approval:** The `approved` label on the GitHub issue signals that work can begin. No label = no work.
+- **Issue approval:** The `approved` label on the GitHub issue signals that spec work can begin. No label = no work.
 - **Spec review approval:** The human communicates accept/reject decisions to Claude in conversation during Phase 4. These are recorded durably in `DECISIONS.md`.
+- **Spec approval:** The `spec:approved` label signals that the finalized spec is approved for implementation. This is the gate between Phase 4 and Phase 5.
 - **Implementation approval:** Standard PR review and merge process.
 - **Phase status:** Tracked in the spec `README.md` status table and the issue's phase labels. Both must stay in sync.
 
