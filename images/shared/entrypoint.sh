@@ -44,6 +44,9 @@ cleanup() {
     fi
     CLIENT_PID=""
 
+    # Remove generated dhclient config
+    rm -f /tmp/dhclient-bngtester.conf
+
     # Remove VLAN interfaces in reverse creation order
     case "$ENCAP" in
         qinq)
@@ -195,12 +198,24 @@ detect_dhcp_client() {
     log "Detected DHCP client: $DHCP_CLIENT"
 }
 
+# --- dhclient config generation ---
+generate_dhclient_conf() {
+    if [ -f /etc/dhcp/dhclient.conf ]; then
+        cp /etc/dhcp/dhclient.conf /tmp/dhclient-bngtester.conf
+    else
+        : > /tmp/dhclient-bngtester.conf
+    fi
+    printf 'timeout %s;\n' "$DHCP_TIMEOUT" >> /tmp/dhclient-bngtester.conf
+}
+
 # --- Dispatch Functions ---
 start_dhcpv4() {
     log "Starting DHCPv4 on $TARGET_IFACE (timeout: ${DHCP_TIMEOUT}s)..."
     case "$DHCP_CLIENT" in
         dhcpcd)  dhcpcd -4 -B -t "$DHCP_TIMEOUT" "$TARGET_IFACE" & ;;
-        dhclient) dhclient -4 -v -1 -d "$TARGET_IFACE" & ;;
+        dhclient)
+            generate_dhclient_conf
+            dhclient -4 -v -1 -d -cf /tmp/dhclient-bngtester.conf "$TARGET_IFACE" & ;;
     esac
     CLIENT_PID=$!
     wait "$CLIENT_PID"
@@ -210,7 +225,9 @@ start_dhcpv6() {
     log "Starting DHCPv6 on $TARGET_IFACE (timeout: ${DHCP_TIMEOUT}s)..."
     case "$DHCP_CLIENT" in
         dhcpcd)  dhcpcd -6 -B -t "$DHCP_TIMEOUT" "$TARGET_IFACE" & ;;
-        dhclient) dhclient -6 -v -1 -d "$TARGET_IFACE" & ;;
+        dhclient)
+            generate_dhclient_conf
+            dhclient -6 -v -1 -d -cf /tmp/dhclient-bngtester.conf "$TARGET_IFACE" & ;;
     esac
     CLIENT_PID=$!
     wait "$CLIENT_PID"
