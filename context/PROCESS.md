@@ -136,8 +136,7 @@ Before implementation begins, the finalized spec must be approved:
 ### Phase 5: Implementation (Claude)
 
 - **Gate:** The `spec:approved` label must be present on the issue (see Spec Approval Gate above).
-- **Output:** Code committed to the repo
-- **PR references the source issue** (e.g., `Closes #N`).
+- **Output:** Code committed to the repo + PR created (see PR Format below).
 - After completing implementation, Claude MUST ask the human whether they want Phase 6 (post-implementation review) and with which agents.
 - **README update:** Mark Phase 5 as Complete. Add branch/PR info.
 - **SUMMARY.md update:** Update `context/SUMMARY.md` with the new spec in Completed Specs, add to the Mermaid dependency graph, record any key decisions that affect future work, and update the Codebase State table.
@@ -147,6 +146,45 @@ Before implementation begins, the finalized spec must be approved:
 1. **Use the existing branch.** The feature branch was created in Phase 1. Check it out if not already on it. Do not create a new branch.
 2. **One commit per logical unit.** Each implementation sub-phase gets its own commit as the work is done.
 3. **Commit message provided immediately.** After completing each unit, provide the conventional commit message, file list, and any context.
+
+#### PR Creation
+
+Creating the PR is the **final step of Phase 5**, not optional. The agent that implements the code creates the PR.
+
+**PR title** follows Conventional Commits format, matching the commit type:
+
+```
+<type>(<scope>): <description>
+```
+
+Examples: `feat(alpine): add shared entrypoint and Alpine subscriber image`, `fix(entrypoint): handle missing 8021q module`, `test(robot): add DHCP lease validation suite`
+
+**PR body** uses this template:
+
+```markdown
+## Summary
+<1-3 bullet points: what changed and why>
+
+Closes #<issue-number>
+
+## Spec
+[`context/specs/<issue-number>-<slug>/`](context/specs/<issue-number>-<slug>/README.md)
+
+## Files
+**Implementation:**
+- `path/to/file` — purpose
+
+**Spec artifacts:**
+- `context/specs/...` — spec, decisions, reviews
+
+## Testing
+- [x] Test that was performed
+- [x] Another test
+
+🤖 <agent/tool attribution — e.g., "Generated with Claude Code", "Generated with Codex CLI", "Generated with n8n", or omit for human-authored PRs>
+```
+
+This template works for all issue types (feature, bug, enhancement, testing). For bug fixes that skip the spec workflow, omit the Spec and Spec artifacts sections. The attribution line identifies which agent or tool created the PR — omit it for human-authored PRs.
 
 ### Phase 6: Post-Implementation Review — optional
 
