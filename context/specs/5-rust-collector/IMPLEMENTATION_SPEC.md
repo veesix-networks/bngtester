@@ -2,7 +2,7 @@
 
 ## Overview
 
-Rust crate at the repo root producing two binaries: `bngtester-server` and `bngtester-client`. Dual-channel architecture (control + data) supporting multiple concurrent streams for throughput, latency, and bufferbloat (RRUL) testing. Measures one-way latency (UDP), RTT (TCP via `TCP_INFO`), jitter, packet loss, reordering, and throughput with sub-microsecond precision. Per-second time-series, latency histograms, and per-packet export for deep analysis. Outputs JUnit XML (with configurable thresholds), JSON, JSONL, and human-readable text.
+Rust crate at the repo root producing two binaries: `bngtester-server` and `bngtester-client`. Dual-channel architecture (control + data) supporting multiple concurrent streams for throughput, latency, and bufferbloat (RRUL) testing. Measures one-way latency (UDP), RTT (TCP via `TCP_INFO`), jitter, packet loss, reordering, and throughput with sub-microsecond precision. Per-second time-series, latency histograms, and per-packet export for deep analysis. Outputs JUnit XML (with configurable thresholds), JSON, JSONL, and human-readable text. Uses tokio async runtime for concurrent stream management.
 
 ## Source Issue
 
@@ -25,17 +25,20 @@ Rust crate at the repo root producing two binaries: `bngtester-server` and `bngt
        |                                            |
        |--- Control Channel (TCP) -----------------→|  coordination, config exchange,
        |                                            |  clock offset estimation,
-       |                                            |  results exchange
+       |                                            |  heartbeat, results exchange
        |                                            |
-       |--- Data Stream 1 (UDP latency probes) ---→|
-       |--- Data Stream 2 (TCP throughput) -------→|  concurrent streams
-       |←-- Data Stream 3 (UDP reverse path) ------|  for RRUL/bidirectional
+       |--- Data Stream 1 (UDP latency probes) ---→|  port from ready message
+       |--- Data Stream 2 (TCP throughput) -------→|  port from ready message
+       |←-- Data Stream 3 (UDP reverse path) ------|  client binds listener
+       |←-- Data Stream 4 (TCP reverse path) ------|  client binds listener
        |                                            |
 ```
 
 **Dual-channel design:**
-- **Control channel** (TCP, always present): Client connects to server, negotiates test parameters, performs clock offset estimation, and exchanges results at test end. The control channel is established first; data channels are started on command.
-- **Data channels** (TCP or UDP, one per stream): Carry test traffic. Multiple concurrent streams enable RRUL testing (saturate + probe simultaneously).
+- **Control channel** (TCP, always present): Client connects to server, negotiates test parameters (including port assignments for each stream), performs clock offset estimation, exchanges heartbeats during tests, and exchanges results at test end. The control channel is established first; data channels are started on command.
+- **Data channels** (TCP or UDP, one per stream): Carry test traffic. Multiple concurrent streams enable RRUL testing (saturate + probe simultaneously). Each stream is bound to a specific port assigned by the server (upstream) or client (downstream).
+
+**Concurrency model:** tokio async runtime. All streams, the control channel, heartbeats, per-second metric sampling, timers, and signal handling run as concurrent tasks within a single tokio runtime. This avoids thread-per-stream overhead and simplifies coordinated shutdown via `CancellationToken`.
 
 ### Packet Format
 
@@ -64,10 +67,10 @@ UDP data streams use a custom header prepended to each payload:
 
 - **Magic:** `0x424E4754` ("BNGT") — identifies bngtester packets.
 - **Version:** Protocol version (starts at `1`). Allows future header changes.
-- **Stream ID:** Identifies which data stream this packet belongs to (0-255). Enables per-stream metrics in concurrent tests.
+- **Stream ID:** Identifies which data stream this packet belongs to (0-255). Enables per-stream metrics in concurrent tests. UDP streams on a shared socket are demultiplexed by this field.
 - **Flags:** Bitfield — `0x01` = last packet in stream (signals clean shutdown).
-- **Sequence Number:** Monotonically increasing per stream. Used for loss and reordering detection.
-- **Timestamp:** `clock_gettime(CLOCK_MONOTONIC)` at send time — nanosecond precision.
+- **Sequence Number:** Monotonically increasing per stream. Used for loss and reordering detection. Wraps at `u32::MAX` — loss/reordering logic must handle wrap-around (a sequence gap > `u32::MAX / 2` is treated as a wrap, not a loss).
+- **Timestamp:** `clock_gettime(CLOCK_MONOTONIC)` at send time — nanosecond precision. Uses `tv_sec` (u64) + `tv_nsec` (u32) matching libc `timespec` layout.
 - **Payload Length:** Total packet size including header. Padding fills to requested size.
 
 Header size: 32 bytes. Minimum packet size: 32 bytes (header only, no padding).
@@ -81,7 +84,12 @@ TCP data streams do not use this header — TCP metrics come from `TCP_INFO` soc
 2. Containers on the same host share the kernel's monotonic clock (same epoch).
 3. Sub-microsecond precision — necessary since osvbng (VPP-based) processes packets in single-digit microseconds.
 
-**Clock offset estimation** for cross-host testing: The control channel runs a simple ping-pong sequence at test start (similar to NTP's algorithm) to estimate the clock offset between client and server. This offset is applied to one-way latency calculations. Accuracy depends on symmetric path delay — sufficient for lab environments, not for production.
+**Clock offset estimation** for cross-host testing: The control channel runs a ping-pong sequence at test start (similar to NTP's algorithm) to estimate the clock offset between client and server. This offset is applied to one-way latency calculations. **One-way latency in cross-host mode is only as accurate as the symmetry of the path delay** — asymmetric paths will produce biased results. Sufficient for lab environments, not for production.
+
+**Clock modes:**
+- **`same-host`** (default): `CLOCK_MONOTONIC` timestamps used directly, no offset estimation. Latency results are authoritative.
+- **`sync-estimated`**: Clock offset estimated via control channel ping-pong. Latency results are marked as "estimated" in reports. Selected automatically when `--cross-host` flag is used, or can be forced.
+- If same-host mode is selected but endpoints are actually on different hosts, latency values will be meaningless. The report includes a `clock_mode` field so consumers know which mode was used.
 
 **Same-host mode** (default): When both endpoints share a kernel (containerlab, Docker on same host), clock offset estimation is skipped and `CLOCK_MONOTONIC` timestamps are used directly. This is the primary use case.
 
@@ -89,7 +97,7 @@ TCP data streams do not use this header — TCP metrics come from `TCP_INFO` soc
 
 #### `throughput` — Link saturation
 
-Single or multiple TCP/UDP streams at maximum rate. Measures goodput (application-level bytes delivered), raw throughput, and for TCP: retransmissions, RTT, and congestion window via `TCP_INFO`.
+Single or multiple TCP/UDP streams at maximum rate. Measures goodput (application-level bytes delivered — labeled as "L4 goodput" to distinguish from L2/L3 throughput), raw throughput, and for TCP: retransmissions, RTT, and congestion window via `TCP_INFO`.
 
 #### `latency` — Precision delay measurement
 
@@ -98,19 +106,79 @@ Low-rate UDP probes (default 100 pps) with embedded timestamps. Measures one-way
 #### `rrul` — Realtime Response Under Load (bufferbloat detection)
 
 Runs concurrently:
-1. **4 TCP throughput streams** (2 upstream, 2 downstream) to saturate the link
+1. **4 TCP throughput streams** (2 upstream, 2 downstream) to saturate the link — staggered start with configurable ramp-up delay (default 100ms between streams) to avoid synchronized TCP slow-start masking BNG scheduling behavior
 2. **1 UDP latency probe stream** (upstream) at low rate (100 pps)
 3. **1 UDP latency probe stream** (downstream) at low rate (100 pps)
 
 The test runs in two phases:
-1. **Baseline** (first 5s): latency probes only, no throughput streams — establishes unloaded latency.
-2. **Loaded** (remaining duration): throughput streams start, latency probes continue — measures latency under load.
+1. **Baseline** (first 5s, configurable): latency probes only, no throughput streams — establishes unloaded latency.
+2. **Loaded** (remaining duration): throughput streams start (staggered), latency probes continue — measures latency under load.
 
 **Bufferbloat metric:** `loaded_p99 / baseline_p99`. A ratio near 1.0 means no bufferbloat. A ratio > 5x indicates significant bufferbloat. This directly validates BNG queue management (CoDel/FQ-CoDel, traffic shaping).
 
 #### `bidirectional` — Asymmetric path testing
 
 Simultaneous upstream (client→server) and downstream (server→client) streams. Catches asymmetric latency, loss, or throughput — common in BNG deployments with different upstream/downstream rate limits.
+
+### Stream Binding Model
+
+Concurrent streams need explicit port/socket assignments. The binding model differs by protocol:
+
+**UDP streams:** All upstream UDP streams on the server share a single UDP socket. Packets are demultiplexed by the `stream_id` field in the packet header. Downstream UDP streams use a single socket on the client side, also demultiplexed by `stream_id`.
+
+**TCP streams:** Each TCP stream gets its own port. The server allocates ports dynamically (binding to port 0, letting the OS assign) and reports the port assignments in the `ready` control message. For reverse-path TCP streams, the client binds listener ports and reports them in the `start` message.
+
+**`ready` message includes:**
+```json
+{
+  "type": "ready",
+  "udp_port": 5001,
+  "tcp_ports": {
+    "0": 5002,
+    "1": 5003
+  }
+}
+```
+
+**`start` message includes (for reverse-path streams):**
+```json
+{
+  "type": "start",
+  "client_udp_port": 6001,
+  "client_tcp_ports": {
+    "2": 6002,
+    "3": 6003
+  }
+}
+```
+
+**NAT/firewall assumption:** Reverse-path streams require the client to be reachable from the server. This is the expected case in containerlab/lab environments where both sides have direct L3 connectivity. NAT traversal is out of scope.
+
+### Session State Machine
+
+The control channel follows this state machine. Both client and server track session state independently.
+
+```
+INIT ──hello──→ NEGOTIATING ──ready──→ SYNCING ──clock_sync──→ READY
+                                                                 │
+                                                          ──start──→ RUNNING
+                                                                       │
+                                                               ──stop──→ COLLECTING
+                                                                           │
+                                                                  ──results──→ DONE
+```
+
+**Failure states:**
+
+| Failure | Detection | Behavior |
+|---------|-----------|----------|
+| Control channel drops during RUNNING | Heartbeat timeout (3 missed = 15s) | Both sides stop data streams, server writes partial results with `"status": "interrupted"`, client exits with error code |
+| Stream fails to connect | TCP connect timeout (5s) | Session continues degraded — failed stream is marked `"status": "failed"` in results. Test is not aborted. RRUL with 3/4 TCP streams is still useful. |
+| Stream ends early | EOF or error on data socket | Stream marked `"status": "early_exit"` in results. Other streams continue. |
+| Clock offset estimation fails | Ping-pong timeout or unreasonable offset (>1s) | Fall back to `sync-estimated` with warning, or abort if `--strict-clock` is set |
+| SIGINT/SIGTERM during test | Signal handler | Client sends `stop`, waits up to 5s for `results`, writes what it has. Server writes partial results on control channel close. |
+
+**Partial results:** When a session ends abnormally, both sides write whatever metrics they collected. Reports include a top-level `"status"` field: `"complete"`, `"interrupted"`, or `"partial"`. JUnit output marks the overall test suite as having an error.
 
 ### Traffic Patterns
 
@@ -124,18 +192,22 @@ Simultaneous upstream (client→server) and downstream (server→client) streams
 
 #### UDP Metrics (per-stream)
 
-- **One-way latency:** `server_recv_time - client_send_time` (adjusted by clock offset if cross-host). Reported as min/avg/max/p50/p95/p99/p999.
+- **One-way latency:** `server_recv_time - client_send_time` (adjusted by clock offset if cross-host). Reported as min/avg/max/p50/p95/p99/p999. Sequence wrap-around at `u32::MAX` is handled — gaps larger than `u32::MAX / 2` are treated as wraps, not losses.
 - **Jitter:** RFC 3550 inter-packet delay variation. Running exponential average.
-- **Packet loss:** `(max_seq - received_count) / max_seq * 100`. Sequence gaps detected from monotonic sequence numbers.
-- **Packet reordering:** Count and percentage of out-of-order packets (sequence number less than highest seen). Important for VPP multi-worker setups where packets may be processed on different cores.
+- **Packet loss:** `(max_seq - received_count) / max_seq * 100`. Sequence gaps detected from monotonic sequence numbers with wrap-around awareness.
+- **Packet reordering:** Count and percentage of out-of-order packets (sequence number less than highest seen, accounting for wrap-around). Important for VPP multi-worker setups where packets may be processed on different cores.
 - **Throughput:** Bytes received / time. Reported as bits/sec and packets/sec.
 
 #### TCP Metrics (per-stream, from `TCP_INFO`)
 
-- **RTT:** Smoothed RTT and RTT variance from the kernel's TCP stack.
-- **Retransmissions:** Total retransmit count — indicates congestion or packet loss.
-- **Congestion window:** `cwnd` evolution over time — shows how TCP responds to BNG shaping/policing.
-- **Goodput:** Application-level bytes delivered / time (excludes retransmissions and headers).
+Uses Linux `TCP_INFO` socket option. Required fields: `tcpi_rtt`, `tcpi_rttvar`, `tcpi_total_retrans`, `tcpi_snd_cwnd`. If the kernel returns a shorter `tcp_info` struct than expected, missing fields are reported as `null` rather than failing.
+
+- **RTT:** Smoothed RTT (`tcpi_rtt`) and RTT variance (`tcpi_rttvar`) from the kernel's TCP stack. Polled every 100ms during the test.
+- **Retransmissions:** Total retransmit count (`tcpi_total_retrans`) — indicates congestion or packet loss.
+- **Congestion window:** `tcpi_snd_cwnd` evolution over time — shows how TCP responds to BNG shaping/policing.
+- **Goodput:** Application-level bytes delivered / time (L4 goodput — excludes retransmissions and TCP/IP headers).
+
+**Portability note:** `TCP_INFO` is Linux-specific (available since Linux 2.4, supported by both musl and glibc). This is acceptable for the three current subscriber images (all Linux). Non-Linux platforms are out of scope.
 
 #### Bufferbloat Metrics (RRUL mode only)
 
@@ -161,14 +233,18 @@ This is critical for BNG analysis — it shows latency spikes, QoS policer kick-
 
 #### Latency Histogram
 
-Bucketed latency distribution with configurable bucket widths (default: 10us buckets up to 1ms, then 100us buckets up to 10ms, then 1ms buckets above). Enables visualization of latency distribution shape — bimodal distributions indicate queue scheduling issues.
+Bucketed latency distribution (default: 10us buckets up to 1ms, then 100us buckets up to 10ms, then 1ms buckets above). Configurable via `--histogram-buckets` CLI flag. Enables visualization of latency distribution shape — bimodal distributions indicate queue scheduling issues.
 
 ### Report Formats
+
+Both `bngtester-server` and `bngtester-client` can produce reports. The server has direct access to received-packet metrics. The client receives server metrics via the `results` control message and merges them with its own send-side metrics to produce a complete report. **The client is the primary report producer** since it is the CI-invoked entrypoint in subscriber containers.
 
 #### JSON — Full structured results
 
 ```json
 {
+  "status": "complete",
+  "clock_mode": "same-host",
   "test": {
     "mode": "rrul",
     "duration_secs": 30,
@@ -180,6 +256,7 @@ Bucketed latency distribution with configurable bucket widths (default: 10us buc
       "id": 0,
       "type": "udp_latency",
       "direction": "upstream",
+      "status": "complete",
       "results": {
         "packets_sent": 3000,
         "packets_received": 2998,
@@ -200,6 +277,7 @@ Bucketed latency distribution with configurable bucket widths (default: 10us buc
       "id": 1,
       "type": "tcp_throughput",
       "direction": "upstream",
+      "status": "complete",
       "results": {
         "goodput_bps": 943200000,
         "rtt_us": { "min": 120, "avg": 450, "max": 12000 },
@@ -268,6 +346,8 @@ This enables external analysis — load into pandas, plot with matplotlib, feed 
 bngtester RRUL test — 30s duration
 ═══════════════════════════════════
 
+Status: complete | Clock: same-host
+
 Bufferbloat: 4.45x (baseline p99: 45.2µs → loaded p99: 201.3µs)
 
   Stream 0 [UDP latency ↑] 100pps
@@ -301,6 +381,7 @@ OPTIONS:
       --threshold <KEY=VAL>     JUnit pass/fail threshold (repeatable)
                                 Keys: loss, p50, p95, p99, p999, jitter,
                                       throughput, bloat
+      --histogram-buckets <SPEC> Latency histogram bucket specification
 ```
 
 #### bngtester-client
@@ -317,11 +398,19 @@ OPTIONS:
   -p, --protocol <PROTO>        Protocol for throughput: tcp, udp [default: tcp]
   -s, --size <BYTES>            Packet size in bytes [default: 512]
   -r, --rate <PPS>              Latency probe rate, packets/sec [default: 100]
-  -d, --duration <SECS>         Test duration in seconds [default: 10]
+  -d, --duration <SECS>         Test duration in seconds [default: 30]
   -P, --pattern <PATTERN>       Traffic pattern: fixed, imix, sweep [default: fixed]
       --rrul-baseline <SECS>    RRUL baseline phase duration [default: 5]
-      --streams <N>             Number of throughput streams [default: 2]
+      --rrul-ramp-up <MS>       Delay between TCP stream starts in RRUL [default: 100]
+      --streams <N>             Number of throughput streams per direction [default: 2]
       --bidir                   Run bidirectional (alias for --mode bidirectional)
+      --cross-host              Use clock offset estimation (for cross-host testing)
+      --strict-clock            Abort if clock sync quality is poor
+  -o, --output <FORMAT>         Output format: json, junit, text [default: text]
+  -f, --file <PATH>             Write report to file (default: stdout)
+      --raw-file <PATH>         Write per-packet JSONL data to file
+      --threshold <KEY=VAL>     JUnit pass/fail threshold (repeatable)
+      --histogram-buckets <SPEC> Latency histogram bucket specification
 ```
 
 ### Control Protocol
@@ -336,14 +425,16 @@ Message types:
 
 | Type | Direction | Purpose |
 |------|-----------|---------|
-| `hello` | client→server | Client sends test configuration |
-| `ready` | server→client | Server confirms ready to receive |
-| `clock_sync` | bidirectional | Clock offset estimation (ping-pong) |
-| `start` | client→server | Begin data streams |
+| `hello` | client→server | Client sends test configuration (mode, streams, duration, patterns) |
+| `ready` | server→client | Server confirms ready + port assignments for each upstream stream |
+| `clock_sync` | bidirectional | Clock offset estimation ping-pong (skipped in same-host mode) |
+| `start` | client→server | Begin data streams + client port assignments for downstream streams |
+| `heartbeat` | bidirectional | Keepalive during test — sent every 5s, 3 missed = session timeout |
 | `stop` | client→server | End test, request results |
 | `results` | server→client | Server sends its metrics |
+| `error` | bidirectional | Report a fatal error with reason string |
 
-This allows the server to know what to expect (which streams, how many, which protocols) before data arrives, and enables exchanging results so both sides can produce complete reports.
+**Heartbeat:** During RUNNING state, both sides send `heartbeat` messages every 5 seconds. If 3 consecutive heartbeats are missed (15s), the control channel is considered dead and the session transitions to the failure path (see Session State Machine). This prevents silent hangs when the BNG or link saturates the control channel's path.
 
 ### Dockerfile Integration
 
@@ -352,10 +443,14 @@ The client binary must be available in all subscriber images. Approach: **multi-
 ```dockerfile
 FROM rust:1.85-alpine AS builder
 WORKDIR /build
+# Cache dependencies first
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && \
+    apk add --no-cache musl-dev && \
+    cargo build --release 2>/dev/null || true
+# Now build the real binary
 COPY src/ src/
-RUN apk add --no-cache musl-dev && \
-    cargo build --release --bin bngtester-client && \
+RUN cargo build --release --bin bngtester-client && \
     strip target/release/bngtester-client
 
 FROM alpine:3.21
@@ -363,9 +458,9 @@ FROM alpine:3.21
 COPY --from=builder /build/target/release/bngtester-client /usr/local/bin/bngtester-client
 ```
 
-Using `rust:1.85-alpine` + musl produces a static binary that works on all three distros (Alpine, Debian, Ubuntu).
+Using `rust:1.85-alpine` + musl produces a static binary that works on all three distros (Alpine, Debian, Ubuntu). The crate uses `jemallocator` as the global allocator to avoid musl's default allocator performance issues at high packet rates.
 
-The build context must change from `images/` to the repo root so Dockerfiles can access `Cargo.toml` and `src/`. The CI workflow (`publish-images.yml`) will need its build context updated.
+The build context must change from `images/` to the repo root so Dockerfiles can access `Cargo.toml` and `src/`. The CI workflow (`publish-images.yml`) will need its build context updated. A `.dockerignore` at the repo root must be added to exclude `.git/`, `context/`, and other non-build inputs from the Docker build context.
 
 **Only the client binary goes into subscriber images.** The server binary is built separately and runs on the far side of the BNG — it is not part of the subscriber containers.
 
@@ -379,20 +474,24 @@ Subscriber images gain `bngtester-client` at `/usr/local/bin/bngtester-client` �
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `Cargo.toml` | Create | Crate manifest with two binary targets |
+| `Cargo.toml` | Create | Crate manifest with two binary targets, jemallocator dep |
 | `Cargo.lock` | Create | Dependency lockfile (committed for binaries) |
+| `.dockerignore` | Create | Exclude `.git/`, `context/`, `target/` from Docker build context |
 | `src/lib.rs` | Create | Shared library: re-exports modules |
 | `src/bin/server.rs` | Create | Server binary: control channel, listeners, orchestration |
-| `src/bin/client.rs` | Create | Client binary: control channel, stream orchestration |
+| `src/bin/client.rs` | Create | Client binary: control channel, stream orchestration, report output |
 | `src/protocol/mod.rs` | Create | Control protocol: message types, serialization |
 | `src/protocol/clock.rs` | Create | Clock offset estimation (ping-pong) |
+| `src/protocol/session.rs` | Create | Session state machine, failure states, heartbeat |
 | `src/traffic/mod.rs` | Create | Traffic module: packet format, generators |
-| `src/traffic/packet.rs` | Create | Packet header struct, serialize/deserialize |
+| `src/traffic/packet.rs` | Create | Packet header struct, serialize/deserialize, wrap-around handling |
 | `src/traffic/generator.rs` | Create | UDP stream generators with rate control |
 | `src/traffic/tcp.rs` | Create | TCP stream generator and `TCP_INFO` reader |
+| `src/traffic/receiver.rs` | Create | Downstream stream receiver (client-side listener for reverse path) |
+| `src/stream/mod.rs` | Create | Stream registry: maps stream IDs to ports, tracks state per stream |
 | `src/metrics/mod.rs` | Create | Metrics module: collectors and aggregation |
 | `src/metrics/latency.rs` | Create | Latency stats, histogram, percentiles |
-| `src/metrics/loss.rs` | Create | Loss and reordering detection from sequence numbers |
+| `src/metrics/loss.rs` | Create | Loss and reordering detection with wrap-around |
 | `src/metrics/throughput.rs` | Create | Throughput and goodput calculation |
 | `src/metrics/jitter.rs` | Create | RFC 3550 jitter computation |
 | `src/metrics/timeseries.rs` | Create | Per-second metric bucketing |
@@ -404,31 +503,35 @@ Subscriber images gain `bngtester-client` at `/usr/local/bin/bngtester-client` �
 | `images/alpine/Dockerfile` | Modify | Add multi-stage Rust builder, copy bngtester-client |
 | `images/debian/Dockerfile` | Modify | Add multi-stage Rust builder, copy bngtester-client |
 | `images/ubuntu/Dockerfile` | Modify | Add multi-stage Rust builder, copy bngtester-client |
+| `.github/workflows/publish-images.yml` | Modify | Update build context from `images/` to repo root |
 
 ## Implementation Order
 
 ### Phase A: Crate scaffold, packet format, and control protocol
-- `Cargo.toml` with dependencies (`clap`, `serde`, `serde_json`, `quick-xml`, `libc` for `clock_gettime`)
-- Packet header struct with serialize/deserialize (big-endian)
-- Control protocol message types and serialization
+- `Cargo.toml` with dependencies (`tokio`, `clap`, `serde`, `serde_json`, `quick-xml`, `libc`, `jemallocator`, `tokio-util` for `CancellationToken`)
+- Packet header struct with serialize/deserialize (big-endian), wrap-around handling
+- Control protocol message types, serialization, session state machine
 - Clock offset estimation
-- Unit tests for packet round-trip and control messages
+- Heartbeat task
+- Unit tests for packet round-trip, wrap-around, control messages, state transitions
 
 ### Phase B: Metrics collection
 - Latency stats with histogram and percentile computation
 - RFC 3550 jitter
-- Sequence-based loss and reordering detection
+- Sequence-based loss and reordering detection with wrap-around
 - Throughput calculation
 - Per-second time-series bucketing
-- Unit tests for each metric
+- Unit tests for each metric (including wrap-around edge cases)
 
-### Phase C: Traffic generators
+### Phase C: Traffic generators and stream management
+- Stream registry: maps stream IDs to ports, tracks per-stream state
 - UDP stream generator with configurable rate, size, IMIX, sweep patterns
-- TCP stream generator with `TCP_INFO` polling
+- TCP stream generator with `TCP_INFO` polling (pin required fields, handle shorter structs)
+- Downstream receiver (client-side listener for reverse-path streams)
 - Timestamp embedding via `clock_gettime(CLOCK_MONOTONIC)`
 
 ### Phase D: Report output
-- JSON structured output (full results with time-series and histogram)
+- JSON structured output (full results with time-series, histogram, status, clock_mode)
 - JUnit XML with configurable thresholds
 - JSONL per-packet raw data
 - Human-readable text
@@ -436,47 +539,62 @@ Subscriber images gain `bngtester-client` at `/usr/local/bin/bngtester-client` �
 
 ### Phase E: Server binary
 - CLI parsing with `clap`
-- Control channel listener (TCP)
-- UDP and TCP data listeners
+- Control channel listener (TCP) with session state machine
+- Port allocation and `ready` message with port assignments
+- UDP and TCP data listeners with stream-ID demuxing
+- Heartbeat sender/receiver
 - Stream-aware metrics collection
+- Partial result handling on abnormal termination
 - Report generation at test end
 
 ### Phase F: Client binary
-- CLI parsing with `clap`
+- CLI parsing with `clap` (including output/threshold flags)
 - Control channel connection and test negotiation
+- Downstream listener binding for reverse-path streams
 - Test mode orchestration (throughput, latency, rrul, bidirectional)
-- RRUL: baseline phase → loaded phase with concurrent streams
-- Clean shutdown on duration expiry or SIGINT/SIGTERM
+- RRUL: baseline phase → staggered TCP ramp-up → loaded phase
+- Result merging from server `results` message + client-side metrics
+- Report writing (client is the primary report producer)
+- Clean shutdown on duration expiry or SIGINT/SIGTERM with partial result output
 
 ### Phase G: Dockerfile integration
-- Update all three Dockerfiles with multi-stage builder
-- Update build context from `images/` to repo root
+- Add `.dockerignore` at repo root
+- Update all three Dockerfiles with multi-stage builder (dep caching + real build)
+- Update build context from `images/` to repo root in Dockerfiles
 - Update `publish-images.yml` build context path
 - Verify images build successfully
 
 ## Testing
 
+- [ ] All new files have SPDX copyright headers
 - [ ] `cargo build --release` succeeds with no warnings
 - [ ] `cargo test` passes all unit tests
 - [ ] Packet header serialization/deserialization round-trips correctly
+- [ ] Sequence number wrap-around handled correctly in loss/reorder detection
 - [ ] Control protocol message exchange works (hello → ready → start → stop → results)
+- [ ] Heartbeat keepalive works — 3 missed heartbeats triggers session timeout
 - [ ] Clock offset estimation produces reasonable values on same host
+- [ ] Session state machine transitions correctly on stream failure (degraded, not aborted)
 - [ ] UDP latency stream: client sends at configured rate, server measures latency
 - [ ] TCP throughput stream: goodput measured, `TCP_INFO` metrics collected
+- [ ] `TCP_INFO` handles shorter-than-expected struct gracefully
 - [ ] IMIX pattern produces correct 7:4:1 size distribution
-- [ ] RRUL mode: baseline phase runs without throughput, loaded phase starts throughput streams
-- [ ] Bidirectional mode: server→client stream works
+- [ ] RRUL mode: baseline phase runs without throughput, TCP streams start staggered
+- [ ] Bidirectional mode: server→client stream works via client-side listener
 - [ ] Per-second time-series data is collected
-- [ ] Latency histogram buckets are correct
+- [ ] Latency histogram buckets are correct and configurable
 - [ ] Loss detection: dropped packets are counted correctly
 - [ ] Reordering detection: out-of-order packets are flagged
-- [ ] JSON output is valid and contains all expected fields
+- [ ] JSON output is valid, contains `status` and `clock_mode` fields
 - [ ] JUnit XML with threshold: exceeded threshold produces `<failure>`
 - [ ] JSONL output has one valid JSON object per line per packet
 - [ ] Text output is human-readable
+- [ ] Client produces merged report with server-side metrics
+- [ ] Partial results written on SIGINT/SIGTERM
 - [ ] Client binary runs in Alpine container
 - [ ] Client binary runs in Debian container
 - [ ] Client binary runs in Ubuntu container
+- [ ] `.dockerignore` excludes `.git/`, `context/`, `target/`
 - [ ] End-to-end: client → BNG → server with metrics collected
 
 ## Not In Scope
@@ -486,3 +604,5 @@ Subscriber images gain `bngtester-client` at `/usr/local/bin/bngtester-client` �
 - GUI or web dashboard
 - Historical data storage
 - PTP clock synchronization (cross-host one-way latency uses estimated offset)
+- Non-Linux platforms (`TCP_INFO` is Linux-specific)
+- NAT traversal for reverse-path streams

@@ -1,6 +1,6 @@
 # 5-rust-collector
 
-**What:** Rust crate producing `bngtester-server` and `bngtester-client` binaries for traffic generation and measurement with sub-microsecond precision.
+**What:** Rust crate producing `bngtester-server` and `bngtester-client` binaries for traffic generation and measurement with sub-microsecond precision, RRUL bufferbloat detection, and multi-stream concurrent testing.
 
 ## Source Issue
 
@@ -11,15 +11,18 @@
 | Phase | Status |
 |-------|--------|
 | Phase 1 — Spec Draft (Claude) | Complete |
-| Phase 2 — Spec Refinement (Gemini) | Not Started |
-| Phase 3 — Spec Critique (Codex) | Not Started |
-| Phase 4 — Spec Finalization (Claude) | Not Started |
+| Phase 2 — Spec Refinement (Gemini) | Complete |
+| Phase 3 — Spec Critique (Codex) | Complete |
+| Phase 4 — Spec Finalization (Claude) | Complete |
 | Phase 5 — Implementation (Claude) | Not Started |
 | Phase 6 — Post-Implementation Review | Not Started |
 
 ## Key Files
 
-- [IMPLEMENTATION_SPEC.md](IMPLEMENTATION_SPEC.md) — full spec
+- [IMPLEMENTATION_SPEC.md](IMPLEMENTATION_SPEC.md) — full spec (finalized)
+- [DECISIONS.md](DECISIONS.md) — accepted/rejected findings (15 accepted, 2 rejected)
+- [spec-reviews/GEMINI.md](spec-reviews/GEMINI.md) — Gemini spec review
+- [spec-reviews/CODEX.md](spec-reviews/CODEX.md) — Codex spec critique
 
 ## Dependencies
 
