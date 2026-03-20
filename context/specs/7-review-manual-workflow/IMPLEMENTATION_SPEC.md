@@ -101,7 +101,7 @@ The audit covers:
 | #3 Debian | PASS | PARTIAL (2/3) | FAIL (stale phase label) | PASS | FAIL (stale status + missing links) | Claude Phase 6 review missing |
 | #4 Ubuntu | PASS | N/A (not invoked) | FAIL (missing spec:approved) | FAIL (fixed) | PASS | spec:approved existed but was missed |
 
-**Core workflow (Phases 1-5) is consistently followed at 100%.** The gaps are in optional phases (Phase 6), label management, commit discipline, and README maintenance — all of which are well-suited for automation. Earlier scoring overstated failure by applying rules retroactively to issues that pre-dated them.
+**Spec drafting and implementation (Phases 1-5 core artifacts) are consistently followed.** Every issue produced a complete IMPLEMENTATION_SPEC, DECISIONS, and working implementation. The gaps are in label lifecycle management (issue #4 missed `spec:approved` despite the rule existing), optional phases (Phase 6), commit discipline, and README maintenance — all of which are well-suited for automation. Earlier scoring overstated failure by applying rules retroactively to issues that pre-dated them. Issues #5 and #6 are approved but have no spec work started — they are not scored here since no workflow was attempted.
 
 ### Deliverable 2: Automation Tooling Decision
 
@@ -149,8 +149,9 @@ Self-hosted n8n with repo-mutation capabilities requires explicit security bound
 2. **Replay protection:** Deduplicate webhook deliveries using the `X-GitHub-Delivery` header as an idempotency key.
 3. **Least-privilege credentials:** The GitHub PAT used by n8n should have minimal scopes — `issues:write`, `pull_requests:write`, `contents:write` on the bngtester repo only. No org-level or admin scopes.
 4. **Command authorization:** `/reject` and `/approve` commands must validate that the commenter has write access to the repo. Non-collaborator comments should be ignored.
-5. **Secret rotation:** GitHub PAT and LLM API keys should be rotated on a defined cadence (e.g., 90 days). n8n credential manager supports this.
-6. **Audit logging:** All n8n actions that mutate repo state (label changes, comments, spec:approved) should be logged with timestamps and trigger context.
+5. **Repository and branch allow-listing:** n8n must only accept webhooks from and mutate state in explicitly allowed repositories (initially `veesix-networks/bngtester` only). Branch mutations must be restricted to branches matching the `<type>/<scope>-<description>` convention — never `main` directly.
+6. **Secret rotation:** GitHub PAT and LLM API keys should be rotated on a defined cadence (e.g., 90 days). n8n credential manager supports this.
+7. **Audit logging:** All n8n actions that mutate repo state (label changes, comments, spec:approved) should be logged with timestamps and trigger context.
 
 #### Failure Recovery and Idempotency
 

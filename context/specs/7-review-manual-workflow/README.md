@@ -15,7 +15,7 @@
 | Phase 3 — Spec Critique (Codex) | Complete |
 | Phase 4 — Spec Finalization (Claude) | Complete |
 | Phase 5 — Implementation (Claude) | Complete |
-| Phase 6 — Post-Implementation Review | Not Started |
+| Phase 6 — Post-Implementation Review | Complete |
 
 ## Key Files
 
@@ -23,6 +23,8 @@
 - [DECISIONS.md](DECISIONS.md) — accepted/rejected review findings (12 accepted, 1 rejected)
 - [spec-reviews/GEMINI.md](spec-reviews/GEMINI.md) — Gemini spec review
 - [spec-reviews/CODEX.md](spec-reviews/CODEX.md) — Codex spec critique
+- [code-reviews/GEMINI.md](code-reviews/GEMINI.md) — Gemini post-implementation review
+- [code-reviews/CODEX.md](code-reviews/CODEX.md) — Codex post-implementation review
 
 ## Dependencies
 
