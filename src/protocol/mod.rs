@@ -6,7 +6,6 @@ pub mod clock;
 pub mod session;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Control protocol message, length-prefixed JSON over TCP.
@@ -37,10 +36,17 @@ pub struct HelloMsg {
     pub cross_host: bool,
 }
 
+/// Port assignment for a specific stream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortAssignment {
+    pub stream_id: u8,
+    pub port: u16,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadyMsg {
     pub udp_port: u16,
-    pub tcp_ports: HashMap<String, u16>,
+    pub tcp_ports: Vec<PortAssignment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +59,7 @@ pub struct ClockSyncMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartMsg {
     pub client_udp_port: Option<u16>,
-    pub client_tcp_ports: HashMap<String, u16>,
+    pub client_tcp_ports: Vec<PortAssignment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,9 +230,10 @@ mod tests {
 
     #[tokio::test]
     async fn ready_with_ports() {
-        let mut tcp_ports = HashMap::new();
-        tcp_ports.insert("0".to_string(), 5002);
-        tcp_ports.insert("1".to_string(), 5003);
+        let tcp_ports = vec![
+            PortAssignment { stream_id: 0, port: 5002 },
+            PortAssignment { stream_id: 1, port: 5003 },
+        ];
         let msg = Message::Ready(ReadyMsg {
             udp_port: 5001,
             tcp_ports,
@@ -240,7 +247,8 @@ mod tests {
             Message::Ready(r) => {
                 assert_eq!(r.udp_port, 5001);
                 assert_eq!(r.tcp_ports.len(), 2);
-                assert_eq!(r.tcp_ports["0"], 5002);
+                assert_eq!(r.tcp_ports[0].stream_id, 0);
+                assert_eq!(r.tcp_ports[0].port, 5002);
             }
             _ => panic!("expected Ready"),
         }
