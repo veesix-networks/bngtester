@@ -1,0 +1,32 @@
+# Copyright The bngtester Authors
+# Licensed under the GNU General Public License v3.0 or later.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "bngtester"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "BNG subscriber traffic generation and measurement"
+
+[[bin]]
+name = "bngtester-server"
+path = "src/bin/server.rs"
+
+[[bin]]
+name = "bngtester-client"
+path = "src/bin/client.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+quick-xml = { version = "0.36", features = ["serialize"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+libc = "0.2"
+jemallocator = "0.5"
+
+[profile.release]
+lto = true
+strip = true
