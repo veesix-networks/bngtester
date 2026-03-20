@@ -12,7 +12,7 @@ Containerlab topology definition that deploys osvbng as a VPP-based BNG with a b
 
 - Subscriber images (Alpine, Debian, Ubuntu) exist at `images/` with the shared entrypoint at `images/shared/entrypoint.sh`. All support IPoE (DHCPv4) with QinQ VLANs and `MGMT_IFACE` default route removal.
 - osvbng has a proven containerlab integration pattern in its own test suite (`tests/18-ipoe-linux-client/`), which uses bngtester subscriber images. This spec adapts that pattern into the bngtester repo so the topology is self-contained and independently deployable.
-- The Rust collector (#5) defines `bngtester-server` and `bngtester-client` binaries but Phase 5 (implementation) has not started — the server binary is a stub. The topology uses iperf3 as the interim far-side service.
+- The Rust collector spec (#5) is finalized but Phase 5 (implementation) has not started. The `bngtester-server` and `bngtester-client` binaries are defined in the spec but do not exist on `main` yet. The topology uses iperf3 as the interim far-side service.
 - Robot Framework integration (#13) is the next planned issue. The topology directory structure is designed so #13 can reference it directly from Robot test suites.
 
 ## Design
@@ -78,36 +78,45 @@ Three nodes connected by two point-to-point links:
 
 ### osvbng Configuration
 
-Adapted from osvbng's own `tests/18-ipoe-linux-client/config/bng1/osvbng.yaml` with simplifications:
+Adapted from osvbng's own `tests/18-ipoe-linux-client/config/bng1/osvbng.yaml` with simplifications (no PPPoE, no IPv6, no BGP/MPLS/CGNAT). The following sections are required in `lab/config/bng1/osvbng.yaml`:
 
-- **IPoE only** — no PPPoE subscriber groups (out of scope per issue)
-- **Local DHCP** — built-in DHCP server, no relay/proxy
-- **Local auth with `allow_all: true`** — any MAC is accepted, no explicit user creation needed
-- **OSPF** — point-to-point on core link for route exchange with server
-- **No IPv6** — DHCPv6/IA-NA/PD omitted (IPoE-first scope)
-- **No BGP/MPLS/CGNAT** — minimal config for subscriber termination
+| Section | Purpose | Key Settings |
+|---------|---------|--------------|
+| `interfaces` | Define BNG interfaces | `eth1` with `bng_mode: access`; `eth2` with `bng_mode: core`, `lcp: true`, address `10.0.0.1/30`; `loop0` (router-id `10.254.0.1/32`, `lcp: true`); `loop100` (subscriber gateway `10.255.0.1/32`, `lcp: true`) |
+| `subscriber-groups` | Match subscriber VLANs to IPoE | Group `default`: `access-type: ipoe`, S-VLAN `100-110`, C-VLAN `any`, interface `loop100`, `aaa-policy: default-policy` |
+| `ipv4-profiles` | DHCP pool and gateway | Profile `default`: gateway `10.255.0.1`, pool `10.255.0.0/16`, DNS `8.8.8.8`/`8.8.4.4`, lease-time `3600` |
+| `dhcp` | Enable built-in DHCP | `provider: local` |
+| `aaa` | Authentication policy | `auth_provider: local`, policy `default-policy` with `format: $mac-address$`, `max_concurrent_sessions: 1` |
+| `plugins` | API and local auth | `northbound.api` on `:8080` (required for session verification); `subscriber.auth.local` with `allow_all: true` |
+| `protocols.ospf` | Core routing | `router-id: 10.254.0.1`, area `0.0.0.0` with `eth2` (point-to-point), `loop0` and `loop100` (passive) |
+| `dataplane` | VPP LCP integration | `lcp-netns: dataplane` — required for VPP to sync interfaces into the Linux control plane namespace where FRR and DHCP operate |
+| `logging` | Debug output | `format: text`, `level: info` |
 
 ### Server Configuration (FRR)
 
 Minimal FRR setup matching osvbng test 18's corerouter1 pattern:
 
-- **OSPF** — point-to-point adjacency with bng1 on core link
-- **Static route** — `10.255.0.0/16 via 10.0.0.1` as backup/initial reachability to subscriber pool
+- **OSPF** — point-to-point adjacency with bng1 on core link, loopback `10.254.0.2/32` as passive
+- **Static route** — `10.255.0.0/16 via 10.0.0.1` as fallback for initial convergence. The smoke test validates OSPF adjacency independently so this route does not mask routing failures.
 - **IP forwarding** enabled
-- **Startup script** — waits for eth1, enables forwarding, starts FRR, reloads config
+- **iperf3** — installed via `apk add` in the entrypoint script (FRR image is Alpine-based). Runs as a daemon (`iperf3 -s -D`) so it is available for throughput tests without manual setup.
+- **Startup script** — waits for eth1, enables forwarding, installs iperf3, starts FRR, reloads config
 
 ### Smoke Test
 
-Shell script that validates the topology post-deployment:
+Shell script that validates the topology post-deployment. Each stage has a concrete timeout and dumps diagnostic output on failure.
 
-1. Wait for osvbng healthy (log marker: `"osvbng started successfully"`)
-2. Check subscriber QinQ interface `eth1.100.10` exists
-3. Check subscriber has a non-link-local IPv4 address on `eth1.100.10`
-4. Ping gateway (`10.255.0.1`) from subscriber
-5. Ping server (`10.0.0.2`) from subscriber through BNG
-6. (Optional) iperf3 throughput test from subscriber to server
+| Stage | Check | Timeout | On Failure |
+|-------|-------|---------|------------|
+| 1 | osvbng healthy (log marker: `"osvbng started successfully"`) | 120s (12 retries × 10s) | Dump `docker logs clab-bngtester-bng1` |
+| 2 | Subscriber QinQ interface `eth1.100.10` exists | 60s (12 retries × 5s) | Dump `ip link` and subscriber container logs |
+| 3 | Subscriber has non-link-local IPv4 on `eth1.100.10` | 90s (18 retries × 5s) | Dump `ip addr`, `ip route`, subscriber logs |
+| 4 | OSPF adjacency established (server sees bng1 as Full neighbor) | 60s (12 retries × 5s) | Dump `vtysh -c "show ip ospf neighbor"` on server and bng1 VPP OSPF state |
+| 5 | Ping gateway (`10.255.0.1`) from subscriber | 3 packets, 2s timeout | Dump subscriber routes |
+| 6 | Ping server (`10.0.0.2`) from subscriber through BNG | 30s (6 retries × 5s) | Dump routes on both subscriber and server |
+| 7 | iperf3 throughput (subscriber → server) | 5s test | Log result; non-fatal if iperf3 fails |
 
-Exit code 0 on success, non-zero on any failure. Each check has a retry loop with timeout to handle startup ordering.
+Exit code 0 on success, non-zero on any failure at stages 1-6. Stage 7 (iperf3) is informational — logged but does not fail the smoke test. The script accepts the lab name as an argument (default: `bngtester`) to derive container names (`clab-<lab-name>-<node>`).
 
 ## Configuration
 
@@ -162,7 +171,7 @@ Set in the topology file, consumed by `images/shared/entrypoint.sh`:
 | `lab/config/server/frr.conf` | FRR routing config (OSPF, static route to subscriber pool) |
 | `lab/config/server/entrypoint.sh` | Server startup script (wait for interface, enable forwarding, start FRR) |
 | `lab/smoke-test.sh` | Post-deployment validation script |
-| `lab/README.md` | Deployment guide: prerequisites, deploy/destroy, image override, troubleshooting |
+| `lab/README.md` | Deployment guide: prerequisites, deploy/destroy, image override, troubleshooting (including QinQ MTU overhead note) |
 | `context/specs/27-containerlab-topology/IMPLEMENTATION_SPEC.md` | This spec |
 | `context/specs/27-containerlab-topology/README.md` | Status tracker |
 
