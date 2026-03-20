@@ -1,0 +1,45 @@
+# 7-review-manual-workflow
+
+**What:** Audit workflow consistency across issues #1-#6 and produce decisions on automation tooling, hosting, and Phase 4 automation design.
+
+## Source Issue
+
+[#7](https://github.com/veesix-networks/bngtester/issues/7)
+
+## Status
+
+| Phase | Status |
+|-------|--------|
+| Phase 1 — Spec Draft (Claude) | Complete |
+| Phase 2 — Spec Refinement (Gemini) | Complete |
+| Phase 3 — Spec Critique (Codex) | Complete |
+| Phase 4 — Spec Finalization (Claude) | Complete |
+| Phase 5 — Implementation (Claude) | Complete |
+| Phase 6 — Post-Implementation Review | Complete |
+
+## Key Files
+
+- [IMPLEMENTATION_SPEC.md](IMPLEMENTATION_SPEC.md) — audit findings, automation design, and decisions
+- [DECISIONS.md](DECISIONS.md) — accepted/rejected review findings (12 accepted, 1 rejected)
+- [spec-reviews/GEMINI.md](spec-reviews/GEMINI.md) — Gemini spec review
+- [spec-reviews/CODEX.md](spec-reviews/CODEX.md) — Codex spec critique
+- [code-reviews/GEMINI.md](code-reviews/GEMINI.md) — Gemini post-implementation review
+- [code-reviews/CODEX.md](code-reviews/CODEX.md) — Codex post-implementation review
+
+## Dependencies
+
+### Upstream
+
+- [0-bootstrap](../0-bootstrap/) — defines the workflow being audited
+- [1-alpine-subscriber-image](../1-alpine-subscriber-image/) — audited spec
+- [2-ci-publish-dockerhub](../2-ci-publish-dockerhub/) — audited spec
+- [3-debian-subscriber-image](../3-debian-subscriber-image/) — audited spec
+- [4-ubuntu-subscriber-image](../4-ubuntu-subscriber-image/) — audited spec
+
+### Downstream
+
+[#23 — n8n workflow automation](https://github.com/veesix-networks/bngtester/issues/23)
+
+## Prompt to Resume
+
+> Read `context/SUMMARY.md` for project state, then read `context/PROCESS.md` for the workflow. Resume work on `context/specs/7-review-manual-workflow/` — check the README for current phase status.
