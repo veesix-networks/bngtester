@@ -76,7 +76,8 @@ Numbered suite convention matches osvbng. Suites 01-03 are standalone, 04+ are i
 | `Ping From Container` | `docker exec ping -c 3 -W 2 <target>` |
 | `Send Signal To Container` | `docker kill --signal <sig> <container>` |
 | `Wait For Container Exit` | `docker wait` with timeout |
-| `Check Interface Removed` | `docker exec ip link show <iface>` returns non-zero |
+| `Run Subscriber Detached` | `docker run -d` with image, capabilities, env vars, network — returns container ID |
+| `Wait For Interface In Container` | Poll `docker exec ip link show <iface>` with `Wait Until Keyword Succeeds`, fail if container exits first |
 
 ### Test Case Design
 
@@ -94,32 +95,39 @@ Tests that the entrypoint rejects invalid configuration with correct error messa
 | Missing PPPOE_PASSWORD | `ACCESS_METHOD=pppoe PPPOE_USER=test` | Exit 1, error contains "PPPOE_PASSWORD is required" |
 | VLAN ID out of range | `ENCAP=single CVLAN=5000` | Exit 1, error contains "must be between 1 and 4094" |
 | Interface name too long | `PHYSICAL_IFACE=longifacename ENCAP=qinq SVLAN=100 CVLAN=10` | Exit 1, error contains "max 15" |
+| Missing NET_ADMIN capability | `ENCAP=single CVLAN=100` (no `--cap-add NET_ADMIN`) | Exit 1, log contains VLAN creation failure message |
 
 #### 02-vlan-modes (Standalone)
 
-Tests VLAN interface creation. Uses `docker run` with `--cap-add NET_ADMIN` and a dedicated Docker network (veth provides the physical interface).
+Tests VLAN interface creation and access method dispatch. Uses `docker run -d` (detached) with `--cap-add NET_ADMIN`, a dedicated Docker network, and `DHCP_TIMEOUT=300` so the container stays alive while Robot polls for interface state.
+
+**Harness:** Run the subscriber container detached. Use `Wait Until Keyword Succeeds` to poll `docker exec ip link show <iface>` while the container is running. Fail immediately if the container exits before the target interface appears. Stop and remove the container in test teardown.
 
 | Test Case | Env Vars | Expected |
 |-----------|----------|----------|
-| Untagged mode | `ENCAP=untagged` | `eth0` used directly as target (no sub-interfaces) |
-| Single VLAN | `ENCAP=single CVLAN=100` | `eth0.100` interface created |
-| QinQ | `ENCAP=qinq SVLAN=100 CVLAN=10` | `eth0.100` (802.1ad) and `eth0.100.10` interfaces created |
+| Untagged mode | `ENCAP=untagged DHCP_TIMEOUT=300` | Entrypoint logs show target interface is `eth0` (no sub-interfaces created) |
+| Single VLAN | `ENCAP=single CVLAN=100 DHCP_TIMEOUT=300` | `eth0.100` interface created, visible via `ip link show` |
+| QinQ | `ENCAP=qinq SVLAN=100 CVLAN=10 DHCP_TIMEOUT=300` | `eth0.100` (802.1ad) and `eth0.100.10` interfaces created |
+| DHCPv6 dispatch | `ACCESS_METHOD=dhcpv6 ENCAP=untagged DHCP_TIMEOUT=300` | Container logs show "Starting DHCPv6" — dhcpcd -6 or dhclient -6 launched |
+| PPPoE dispatch | `ACCESS_METHOD=pppoe ENCAP=untagged PPPOE_USER=test PPPOE_PASSWORD=test` | Container logs show "Starting PPPoE" — pppd process launched |
 
-Note: These tests verify interface creation only. DHCP will timeout (no server), so the container will exit with a DHCP error — tests check for interface existence before that happens using a sidecar check or by inspecting the container state after a short delay.
+**Host requirement:** The Docker host must have `8021q` kernel module loaded for VLAN tests. QinQ additionally requires `8021ad` (typically built into the `8021q` module on modern kernels).
 
 #### 03-cleanup (Standalone)
 
-Tests cleanup behavior on signal and failure. Uses `docker run` with a dedicated network.
+Tests cleanup behavior on signal and failure. Uses `docker run -d` with a dedicated network. Verification is **log-based** — once the container exits, its network namespace is destroyed by Docker, so we cannot inspect interface state post-exit. Instead, we verify: (1) the entrypoint logs cleanup messages in the correct order, (2) the container exits with the expected code.
 
 | Test Case | Scenario | Expected |
 |-----------|----------|----------|
-| SIGTERM cleanup (QinQ) | Start with QinQ, send SIGTERM | Container exits, VLAN interfaces removed from network namespace |
-| SIGTERM cleanup (single) | Start with single VLAN, send SIGTERM | Container exits, VLAN interface removed |
-| DHCP timeout exit | Start with no DHCP server, wait for timeout | Container exits after DHCP_TIMEOUT, interfaces cleaned up |
+| SIGTERM cleanup (QinQ) | Start detached with QinQ + `DHCP_TIMEOUT=300`, send SIGTERM | Exit code 143, logs contain cleanup in reverse order (C-VLAN removed, then S-VLAN) |
+| SIGTERM cleanup (single) | Start detached with single VLAN + `DHCP_TIMEOUT=300`, send SIGTERM | Exit code 143, logs show VLAN interface removal |
+| DHCP timeout exit | Start detached with `DHCP_TIMEOUT=5` (very short, no DHCP server) | Container exits after ~5s, logs show DHCP timeout, cleanup messages present |
+
+**Limitation:** This verifies cleanup *attempted* via log evidence, not cleanup *succeeded* via namespace inspection. A future enhancement could use a shared-namespace observer container to verify interface removal directly. This is documented as a known limitation.
 
 #### 04-ipoe-bng (Integration)
 
-Tests IPoE subscriber through the osvbng BNG using the `lab/` topology. This is the Robot Framework equivalent of `lab/smoke-test.sh` — structured, with proper reporting.
+Tests IPoE subscriber through the osvbng BNG using the `lab/` topology. This is the Robot Framework equivalent of `lab/smoke-test.sh` — structured, with proper reporting. **All test cases tagged `integration`** so they can be excluded from CI runs: `--exclude integration`.
 
 | Test Case | Check |
 |-----------|-------|
@@ -132,7 +140,11 @@ Tests IPoE subscriber through the osvbng BNG using the `lab/` topology. This is 
 | Subscriber Can Ping Server Through BNG | Ping `10.0.0.2` from subscriber |
 | Iperf3 Throughput | iperf3 from subscriber to server (informational) |
 
-Suite Setup deploys the lab topology (with `BNGTESTER_IMAGE` variable for image matrix). Suite Teardown destroys it.
+**Suite Setup:** Sets `BNGTESTER_IMAGE` env var from `${SUBSCRIBER_IMAGE}`, then calls `Deploy Topology` with `lab/bngtester.clab.yml`. The `--reconfigure` flag means it will take over an existing lab with the same name. `sudo -E` is used to preserve the image override env vars.
+
+**Suite Teardown:** Calls `Destroy Topology` which captures container logs then runs `clab destroy --cleanup`.
+
+**Lab ownership:** This suite owns the `bngtester` lab for the duration of its run. If the lab is already deployed (e.g., for debugging), `--reconfigure` will redeploy it. Users should be aware the suite destroys the lab on teardown.
 
 ### Image Matrix
 
@@ -148,6 +160,7 @@ For integration tests, the variable maps to `BNGTESTER_IMAGE` in the containerla
 
 `tests/rf-run.sh` — adapted from osvbng's `tests/rf-run.sh`:
 
+- **Preflight checks:** Verifies `docker info` succeeds (Docker running), checks `${SUBSCRIBER_IMAGE}` is available (`docker image inspect`), and for integration tests checks `command -v containerlab` and `sudo -n true`. Exits with a clear error message if any check fails.
 - Creates Python venv at `tests/.venv/` with `robotframework>=7.0`
 - Runs `robot` with output to `tests/out/`
 - Log naming: `{suite-dir}-log.html`, `{suite-dir}-out.xml`
@@ -170,8 +183,10 @@ For integration tests, the variable maps to `BNGTESTER_IMAGE` in the containerla
 - Python >= 3.10
 - `robotframework >= 7.0`
 - Docker (all tests)
+- `8021q` kernel module loaded on Docker host (VLAN tests)
 - containerlab (integration tests only)
 - osvbng image (integration tests only)
+- Hugepages configured on host (integration tests only — osvbng/VPP requirement)
 
 ## File Plan
 
@@ -183,10 +198,10 @@ For integration tests, the variable maps to `BNGTESTER_IMAGE` in the containerla
 | `tests/subscriber.robot` | Subscriber keywords: interface checks, IP checks, ping, signal, container lifecycle |
 | `tests/rf-run.sh` | Test runner script (venv, robot CLI, output management) |
 | `tests/.gitignore` | Ignore `.venv/` and `out/` |
-| `tests/01-entrypoint-validation/01-entrypoint-validation.robot` | Entrypoint env var validation tests (8 cases) |
-| `tests/02-vlan-modes/02-vlan-modes.robot` | VLAN interface creation tests: untagged, single, QinQ (3 cases) |
-| `tests/03-cleanup/03-cleanup.robot` | SIGTERM and timeout cleanup tests (3 cases) |
-| `tests/04-ipoe-bng/04-ipoe-bng.robot` | IPoE through BNG integration tests (8 cases) |
+| `tests/01-entrypoint-validation/01-entrypoint-validation.robot` | Entrypoint env var validation tests (9 cases incl. missing capability) |
+| `tests/02-vlan-modes/02-vlan-modes.robot` | VLAN creation + access method dispatch tests (5 cases: untagged, single, QinQ, DHCPv6, PPPoE) |
+| `tests/03-cleanup/03-cleanup.robot` | SIGTERM and timeout cleanup tests (3 cases, log-based verification) |
+| `tests/04-ipoe-bng/04-ipoe-bng.robot` | IPoE through BNG integration tests (8 cases, tagged `integration`) |
 | `context/specs/13-robot-framework/IMPLEMENTATION_SPEC.md` | This spec |
 | `context/specs/13-robot-framework/README.md` | Status tracker |
 
@@ -266,7 +281,7 @@ OSVBNG_IMAGE=veesixnetworks/osvbng:local ./tests/rf-run.sh tests/04-ipoe-bng/
 
 ## Not In Scope
 
-- **osvbng-side Robot integration** — osvbng has its own test suites; interop is an osvbng issue
+- **osvbng-side Robot integration** — osvbng has its own test suites; interop is an osvbng issue. `tests/common.robot` documents the shared keyword interface that osvbng tests can import (same keyword signatures as osvbng's `common.robot`) — this satisfies the acceptance criterion for a documented interop point.
 - **Rust collector integration** — depends on #5; collector-specific test cases will be added then
 - **Performance/load testing** — single subscriber validation only
 - **CI workflow** — the test suite is runnable locally and in CI, but the GitHub Actions workflow is a separate issue (requires self-hosted runner for integration tests)
