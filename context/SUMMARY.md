@@ -6,7 +6,7 @@ This file is the project-level state tracker. Every agent session should read th
 
 ## Current State
 
-Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to Docker Hub via a CI pipeline. The shared entrypoint script supports all access methods and encapsulation types, with auto-detected DHCP client dispatch for both dhcpcd and dhclient. The AI workflow has been refined with early branching, priority labels, spec approval gates, and a standardized PR format. A workflow consistency audit (#7) found core spec/implementation phases consistently followed, with gaps in label lifecycle, Phase 6 tracking, and commit discipline — n8n has been selected as the automation tool to address these.
+Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to Docker Hub via a CI pipeline. The shared entrypoint script supports all access methods and encapsulation types, with auto-detected DHCP client dispatch for both dhcpcd and dhclient. A containerlab topology (`lab/`) deploys osvbng as a VPP-based BNG with a bngtester subscriber and FRR-based server for end-to-end IPoE validation — DHCP lease acquisition, gateway reachability, and cross-BNG connectivity through a real data plane. The AI workflow has been refined with early branching, priority labels, spec approval gates, and a standardized PR format. A workflow consistency audit (#7) found core spec/implementation phases consistently followed, with gaps in label lifecycle, Phase 6 tracking, and commit discipline — n8n has been selected as the automation tool to address these.
 
 ## Completed Specs
 
@@ -19,6 +19,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [2-ci-publish-dockerhub](specs/2-ci-publish-dockerhub/) | [#2](https://github.com/veesix-networks/bngtester/issues/2) | Complete | CI pipeline to build and publish subscriber images to Docker Hub |
 | [7-review-manual-workflow](specs/7-review-manual-workflow/) | [#7](https://github.com/veesix-networks/bngtester/issues/7) | Complete | Workflow consistency audit + n8n automation design |
 | [22-mgmt-iface-awareness](specs/22-mgmt-iface-awareness/) | [#22](https://github.com/veesix-networks/bngtester/issues/22) | Complete | Management interface default route removal |
+| [27-containerlab-topology](specs/27-containerlab-topology/) | [#27](https://github.com/veesix-networks/bngtester/issues/27) | Complete | Containerlab topology with osvbng BNG, bngtester subscriber, FRR server |
 
 ## Spec Dependencies
 
@@ -45,6 +46,8 @@ graph TD
     U --> WF
     CI --> WF
     A --> MI[22-mgmt-iface-awareness<br/>MGMT_IFACE route removal]
+    A --> CL[27-containerlab-topology<br/>osvbng lab topology]
+    MI --> CL
 
     style B fill:#2da44e,color:#fff
     style A fill:#2da44e,color:#fff
@@ -53,6 +56,7 @@ graph TD
     style CI fill:#2da44e,color:#fff
     style WF fill:#2da44e,color:#fff
     style MI fill:#2da44e,color:#fff
+    style CL fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
@@ -110,6 +114,14 @@ Decisions that affect future specs. Read these before proposing new work.
 
 - **`MGMT_IFACE` removes only the default route, not the interface.** The connected route for the management subnet is preserved so orchestrators can still reach the container's management IP. This is critical for containerlab and similar tools where management access is needed for API/metrics.
 
+### From 27-containerlab-topology
+
+- **Lab topology lives in `lab/`, not `tests/`.** The `lab/` directory contains the containerlab topology, osvbng config, FRR server config, smoke test, and README. Robot Framework tests (#13) will reference topologies from `lab/` rather than bundling their own.
+- **osvbng test 18 is the reference pattern.** The topology is adapted from osvbng's own `tests/18-ipoe-linux-client/` — same IP scheme, same VLAN scheme (S-VLAN 100, C-VLAN 10), same OSPF design. This keeps the two repos aligned.
+- **Server node is FRR, not bngtester-server.** The Rust collector (#5) defines `bngtester-server` but it is not implemented yet. The FRR-based server node provides OSPF routing and iperf3 as an interim far-side endpoint. When the Rust binary is ready, it can replace or augment this node.
+- **`dataplane.lcp-netns` is required in osvbng.yaml.** Without `lcp-netns: dataplane`, VPP cannot sync interfaces into the Linux control plane namespace where FRR and DHCP operate. This must be present in any osvbng configuration used with containerlab.
+- **Image override via environment variables.** `OSVBNG_IMAGE` and `BNGTESTER_IMAGE` allow swapping images at deploy time (e.g., testing Debian subscriber or local osvbng build). Use `sudo -E` to pass env vars through to containerlab.
+
 ### From 0-bootstrap
 
 - **Gemini produces review artifacts, not direct spec edits.** All review agents write to `spec-reviews/` — Claude is the only agent that modifies the spec itself (Phase 4).
@@ -122,6 +134,7 @@ Decisions that affect future specs. Read these before proposing new work.
 | Component | Exists | Notes |
 |-----------|--------|-------|
 | `images/` | Yes | Alpine + Debian + Ubuntu images, shared entrypoint (`images/shared/entrypoint.sh`, `images/alpine/Dockerfile`, `images/debian/Dockerfile`, `images/ubuntu/Dockerfile`) |
+| `lab/` | Yes | Containerlab topology (`bngtester.clab.yml`), osvbng config, FRR server config, smoke test, README |
 | `collector/` | No | Go collector not started |
 | `.github/workflows/` | Yes | `publish-images.yml` — builds and publishes subscriber images to Docker Hub |
 | `context/` | Yes | Workflow docs and bootstrap spec |
