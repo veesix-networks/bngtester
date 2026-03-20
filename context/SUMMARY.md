@@ -18,6 +18,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [4-ubuntu-subscriber-image](specs/4-ubuntu-subscriber-image/) | [#4](https://github.com/veesix-networks/bngtester/issues/4) | Complete | Ubuntu 22.04 subscriber image (Dockerfile only, no entrypoint changes) |
 | [2-ci-publish-dockerhub](specs/2-ci-publish-dockerhub/) | [#2](https://github.com/veesix-networks/bngtester/issues/2) | Complete | CI pipeline to build and publish subscriber images to Docker Hub |
 | [7-review-manual-workflow](specs/7-review-manual-workflow/) | [#7](https://github.com/veesix-networks/bngtester/issues/7) | Complete | Workflow consistency audit + n8n automation design |
+| [22-mgmt-iface-awareness](specs/22-mgmt-iface-awareness/) | [#22](https://github.com/veesix-networks/bngtester/issues/22) | Complete | Management interface default route removal |
 
 ## Spec Dependencies
 
@@ -43,6 +44,7 @@ graph TD
     D --> WF
     U --> WF
     CI --> WF
+    A --> MI[22-mgmt-iface-awareness<br/>MGMT_IFACE route removal]
 
     style B fill:#2da44e,color:#fff
     style A fill:#2da44e,color:#fff
@@ -50,6 +52,7 @@ graph TD
     style U fill:#2da44e,color:#fff
     style CI fill:#2da44e,color:#fff
     style WF fill:#2da44e,color:#fff
+    style MI fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
@@ -102,6 +105,10 @@ Decisions that affect future specs. Read these before proposing new work.
 - **Security model for self-hosted n8n.** Webhook HMAC verification, replay protection via `X-GitHub-Delivery`, least-privilege repo-scoped PAT, `/reject`/`/approve` command authorization (write-access only), repo and branch allow-listing, 90-day secret rotation, and audit logging for all repo-mutation actions.
 - **Failure recovery and idempotency required.** Persisted run keys to prevent double-runs, webhook deduplication, PostgreSQL for wait-node crash recovery, partial failure handling with resume-from-failed-step, and watchdog timers (15min) for agent execution.
 - **API-invoked agents need context injection.** When n8n invokes agents via API (not CLI), it must read and inject branch state (spec, source files, SUMMARY.md) into the prompt.
+
+### From 22-mgmt-iface-awareness
+
+- **`MGMT_IFACE` removes only the default route, not the interface.** The connected route for the management subnet is preserved so orchestrators can still reach the container's management IP. This is critical for containerlab and similar tools where management access is needed for API/metrics.
 
 ### From 0-bootstrap
 

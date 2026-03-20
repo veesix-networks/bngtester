@@ -20,6 +20,7 @@ CVLAN="${CVLAN:-}"
 PPPOE_USER="${PPPOE_USER:-}"
 PPPOE_PASSWORD="${PPPOE_PASSWORD:-}"
 PPPOE_SERVICE="${PPPOE_SERVICE:-}"
+MGMT_IFACE="${MGMT_IFACE:-}"
 
 # --- State ---
 CLIENT_PID=""
@@ -250,12 +251,26 @@ start_pppoe() {
     exec "$@"
 }
 
+# --- Management Interface ---
+remove_mgmt_default_route() {
+    if [ -z "$MGMT_IFACE" ]; then
+        return
+    fi
+    log "Removing default route via management interface $MGMT_IFACE..."
+    if ip route del default dev "$MGMT_IFACE" 2>/dev/null; then
+        log "Default route via $MGMT_IFACE removed"
+    else
+        log "No default route via $MGMT_IFACE found (may already be absent)"
+    fi
+}
+
 # --- Main ---
 log "Config: ACCESS_METHOD=$ACCESS_METHOD ENCAP=$ENCAP PHYSICAL_IFACE=$PHYSICAL_IFACE"
 
 validate
 wait_for_interface
 configure_vlans
+remove_mgmt_default_route
 
 case "$ACCESS_METHOD" in
     dhcpv4|dhcpv6) detect_dhcp_client ;;
