@@ -1,0 +1,8 @@
+zebra=yes
+ospfd=yes
+staticd=yes
+
+vtysh_enable=yes
+zebra_options="  -A 127.0.0.1"
+ospfd_options="  -A 127.0.0.1"
+staticd_options="-A 127.0.0.1"
