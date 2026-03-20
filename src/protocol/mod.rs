@@ -40,7 +40,7 @@ pub struct HelloMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadyMsg {
     pub udp_port: u16,
-    pub tcp_ports: HashMap<u8, u16>,
+    pub tcp_ports: HashMap<String, u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +53,7 @@ pub struct ClockSyncMsg {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartMsg {
     pub client_udp_port: Option<u16>,
-    pub client_tcp_ports: HashMap<u8, u16>,
+    pub client_tcp_ports: HashMap<String, u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,8 +225,8 @@ mod tests {
     #[tokio::test]
     async fn ready_with_ports() {
         let mut tcp_ports = HashMap::new();
-        tcp_ports.insert(0, 5002);
-        tcp_ports.insert(1, 5003);
+        tcp_ports.insert("0".to_string(), 5002);
+        tcp_ports.insert("1".to_string(), 5003);
         let msg = Message::Ready(ReadyMsg {
             udp_port: 5001,
             tcp_ports,
@@ -240,7 +240,7 @@ mod tests {
             Message::Ready(r) => {
                 assert_eq!(r.udp_port, 5001);
                 assert_eq!(r.tcp_ports.len(), 2);
-                assert_eq!(r.tcp_ports[&0], 5002);
+                assert_eq!(r.tcp_ports["0"], 5002);
             }
             _ => panic!("expected Ready"),
         }
