@@ -1,0 +1,96 @@
+# Copyright The bngtester Authors
+# Licensed under the GNU General Public License v3.0 or later.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+subscriber-groups:
+    groups:
+        default:
+            access-type: ipoe
+            ipv4-profile: default
+            vlans:
+                - svlan: "100-110"
+                  cvlan: any
+                  interface: loop100
+            aaa-policy: default-policy
+
+ipv4-profiles:
+    default:
+        gateway: 10.255.0.1
+        dns:
+            - 8.8.8.8
+            - 8.8.4.4
+        pools:
+            - name: subscriber-pool
+              network: 10.255.0.0/16
+              priority: 1
+        dhcp:
+            lease-time: 3600
+
+dhcp:
+    provider: local
+
+interfaces:
+    loop0:
+        description: Control Plane Loopback
+        enabled: true
+        address:
+            ipv4:
+                - 10.254.0.1/32
+        lcp: true
+    eth1:
+        description: Access Interface
+        enabled: true
+        bng_mode: access
+    eth2:
+        description: Core Link
+        enabled: true
+        bng_mode: core
+        lcp: true
+        address:
+            ipv4:
+                - 10.0.0.1/30
+    loop100:
+        description: Subscriber Gateway Loopback
+        enabled: true
+        address:
+            ipv4:
+                - 10.255.0.1/32
+        lcp: true
+
+protocols:
+    ospf:
+        enabled: true
+        router-id: 10.254.0.1
+        log-adjacency-changes: true
+        areas:
+            "0.0.0.0":
+                interfaces:
+                    eth2:
+                        network: point-to-point
+                    loop0:
+                        passive: true
+                    loop100:
+                        passive: true
+
+aaa:
+    auth_provider: local
+    nas_identifier: osvbng
+    policy:
+        - name: default-policy
+          format: $mac-address$
+          max_concurrent_sessions: 1
+
+plugins:
+    northbound.api:
+        enabled: true
+        listen_address: :8080
+    subscriber.auth.local:
+        allow_all: true
+        database_path: /tmp/osvbng.db
+
+logging:
+    format: text
+    level: info
+
+dataplane:
+    lcp-netns: dataplane
