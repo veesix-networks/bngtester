@@ -20,6 +20,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [7-review-manual-workflow](specs/7-review-manual-workflow/) | [#7](https://github.com/veesix-networks/bngtester/issues/7) | Complete | Workflow consistency audit + n8n automation design |
 | [22-mgmt-iface-awareness](specs/22-mgmt-iface-awareness/) | [#22](https://github.com/veesix-networks/bngtester/issues/22) | Complete | Management interface default route removal |
 | [27-containerlab-topology](specs/27-containerlab-topology/) | [#27](https://github.com/veesix-networks/bngtester/issues/27) | Complete | Containerlab topology with osvbng BNG, bngtester subscriber, FRR server |
+| [5-rust-collector](specs/5-rust-collector/) | [#5](https://github.com/veesix-networks/bngtester/issues/5) | Complete | Rust collector — bngtester-server and bngtester-client binaries |
 | [13-robot-framework](specs/13-robot-framework/) | [#13](https://github.com/veesix-networks/bngtester/issues/13) | Complete | Robot Framework test runner with standalone + BNG integration tests |
 
 ## Spec Dependencies
@@ -118,6 +119,16 @@ Decisions that affect future specs. Read these before proposing new work.
 
 - **`MGMT_IFACE` removes only the default route, not the interface.** The connected route for the management subnet is preserved so orchestrators can still reach the container's management IP. This is critical for containerlab and similar tools where management access is needed for API/metrics.
 
+### From 5-rust-collector
+
+- **Dual-channel architecture: control (TCP) + data (UDP/TCP).** Control channel handles negotiation, clock sync, heartbeat, and result exchange. Data channels carry test traffic with per-stream metrics.
+- **UDP uses embedded CLOCK_MONOTONIC timestamps for one-way latency.** Only accurate when client and server share a kernel (containerlab, same host). Cross-host uses estimated offset via NTP-style ping-pong — results marked as "sync-estimated".
+- **TCP metrics from TCP_INFO, not embedded timestamps.** TCP buffering makes per-packet timestamps unreliable. Instead, poll `tcpi_rtt`, `tcpi_total_retrans`, `tcpi_snd_cwnd` via getsockopt every 100ms.
+- **Client is the primary report producer.** Client receives server metrics via control channel `results` message and merges with send-side metrics. Both sides can produce independent reports.
+- **jemallocator for musl static binaries.** Musl's default allocator is a bottleneck at high packet rates. All binaries use jemalloc as the global allocator.
+- **Multi-stage Docker builds with dependency caching.** Dockerfiles copy Cargo.toml/Cargo.lock first, do a dummy build to cache deps, then copy src/ for the real build. Build context changed from `images/` to repo root. `.dockerignore` excludes `.git/`, `context/`, `target/`.
+- **Sequence number wrap-around at u32.** At 10Gbps with 64-byte packets, u32 wraps in ~5 minutes. Loss/reorder detection treats gaps > u32::MAX/2 as wraps.
+
 ### From 27-containerlab-topology
 
 - **Lab topology lives in `lab/`, not `tests/`.** The `lab/` directory contains the containerlab topology, osvbng config, FRR server config, smoke test, and README. Robot Framework tests (#13) will reference topologies from `lab/` rather than bundling their own.
@@ -148,7 +159,7 @@ Decisions that affect future specs. Read these before proposing new work.
 | `images/` | Yes | Alpine + Debian + Ubuntu images, shared entrypoint (`images/shared/entrypoint.sh`, `images/alpine/Dockerfile`, `images/debian/Dockerfile`, `images/ubuntu/Dockerfile`) |
 | `lab/` | Yes | Containerlab topology (`bngtester.clab.yml`), osvbng config, FRR server config, smoke test, README |
 | `tests/` | Yes | Robot Framework suites: `01-entrypoint-validation`, `02-vlan-modes`, `03-cleanup` (standalone), `04-ipoe-bng` (integration). Shared keywords in `common.robot` + `subscriber.robot`. Runner: `rf-run.sh` |
-| `collector/` | No | Go collector not started |
+| `src/` | Yes | Rust crate — `bngtester-server` and `bngtester-client` binaries. Packet format, control protocol, metrics (latency/jitter/loss/throughput/time-series), report formatters (JSON/JUnit/JSONL/text). Client binary included in subscriber images via multi-stage Docker build. |
 | `.github/workflows/` | Yes | `publish-images.yml` — builds and publishes subscriber images to Docker Hub |
 | `context/` | Yes | Workflow docs and bootstrap spec |
 | `.github/ISSUE_TEMPLATE/` | Yes | Feature, bug, enhancement, testing templates |

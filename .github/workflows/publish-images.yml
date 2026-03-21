@@ -50,7 +50,7 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: images/
+          context: .
           file: images/${{ matrix.image }}/Dockerfile
           platforms: linux/amd64
           push: false
@@ -87,7 +87,7 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: images/
+          context: .
           file: images/${{ matrix.image }}/Dockerfile
           platforms: linux/amd64
           push: true
