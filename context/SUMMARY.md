@@ -20,6 +20,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [7-review-manual-workflow](specs/7-review-manual-workflow/) | [#7](https://github.com/veesix-networks/bngtester/issues/7) | Complete | Workflow consistency audit + n8n automation design |
 | [22-mgmt-iface-awareness](specs/22-mgmt-iface-awareness/) | [#22](https://github.com/veesix-networks/bngtester/issues/22) | Complete | Management interface default route removal |
 | [27-containerlab-topology](specs/27-containerlab-topology/) | [#27](https://github.com/veesix-networks/bngtester/issues/27) | Complete | Containerlab topology with osvbng BNG, bngtester subscriber, FRR server |
+| [13-robot-framework](specs/13-robot-framework/) | [#13](https://github.com/veesix-networks/bngtester/issues/13) | Complete | Robot Framework test runner with standalone + BNG integration tests |
 
 ## Spec Dependencies
 
@@ -48,6 +49,8 @@ graph TD
     A --> MI[22-mgmt-iface-awareness<br/>MGMT_IFACE route removal]
     A --> CL[27-containerlab-topology<br/>osvbng lab topology]
     MI --> CL
+    CL --> RF[13-robot-framework<br/>Robot Framework tests]
+    A --> RF
 
     style B fill:#2da44e,color:#fff
     style A fill:#2da44e,color:#fff
@@ -57,6 +60,7 @@ graph TD
     style WF fill:#2da44e,color:#fff
     style MI fill:#2da44e,color:#fff
     style CL fill:#2da44e,color:#fff
+    style RF fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
@@ -122,6 +126,14 @@ Decisions that affect future specs. Read these before proposing new work.
 - **`dataplane.lcp-netns` is required in osvbng.yaml.** Without `lcp-netns: dataplane`, VPP cannot sync interfaces into the Linux control plane namespace where FRR and DHCP operate. This must be present in any osvbng configuration used with containerlab.
 - **Image override via environment variables.** `OSVBNG_IMAGE` and `BNGTESTER_IMAGE` allow swapping images at deploy time (e.g., testing Debian subscriber or local osvbng build). Use `sudo -E` to pass env vars through to containerlab.
 
+### From 13-robot-framework
+
+- **Two test tiers: standalone and integration.** Standalone tests (01-03) use `docker run` and need only Docker. Integration tests (04+) use containerlab + osvbng and are tagged `integration` for exclusion from CI.
+- **Log-based verification for standalone VLAN/cleanup tests.** dhcpcd crashes in standalone Docker environments (sysctl restrictions), so VLAN creation is verified via entrypoint log messages rather than `docker exec ip link show`. This is a known limitation.
+- **`sudo -E containerlab` preserves image override env vars.** Plain `sudo` strips environment variables. The `CLAB_BIN` variable in common.robot uses `sudo -E` so `OSVBNG_IMAGE` and `BNGTESTER_IMAGE` pass through to containerlab.
+- **Image matrix via `--variable SUBSCRIBER_IMAGE:`** — all suites accept this Robot variable. Integration tests also accept `OSVBNG_IMAGE` for the BNG image.
+- **Shared keyword interface matches osvbng's common.robot.** Same keyword signatures (Deploy Topology, Destroy Topology, Wait For osvbng Healthy, Execute VPP Command, etc.) enable future interop where osvbng tests can import bngtester keywords.
+
 ### From 0-bootstrap
 
 - **Gemini produces review artifacts, not direct spec edits.** All review agents write to `spec-reviews/` — Claude is the only agent that modifies the spec itself (Phase 4).
@@ -135,6 +147,7 @@ Decisions that affect future specs. Read these before proposing new work.
 |-----------|--------|-------|
 | `images/` | Yes | Alpine + Debian + Ubuntu images, shared entrypoint (`images/shared/entrypoint.sh`, `images/alpine/Dockerfile`, `images/debian/Dockerfile`, `images/ubuntu/Dockerfile`) |
 | `lab/` | Yes | Containerlab topology (`bngtester.clab.yml`), osvbng config, FRR server config, smoke test, README |
+| `tests/` | Yes | Robot Framework suites: `01-entrypoint-validation`, `02-vlan-modes`, `03-cleanup` (standalone), `04-ipoe-bng` (integration). Shared keywords in `common.robot` + `subscriber.robot`. Runner: `rf-run.sh` |
 | `collector/` | No | Go collector not started |
 | `.github/workflows/` | Yes | `publish-images.yml` — builds and publishes subscriber images to Docker Hub |
 | `context/` | Yes | Workflow docs and bootstrap spec |
