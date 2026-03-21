@@ -4,17 +4,10 @@
 
 FROM rust:1.85-alpine AS builder
 WORKDIR /build
+RUN apk add --no-cache musl-dev make
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src/bin && \
-    echo 'fn main() {}' > src/bin/client.rs && \
-    echo 'fn main() {}' > src/bin/server.rs && \
-    echo '' > src/lib.rs && \
-    apk add --no-cache musl-dev && \
-    cargo build --release 2>/dev/null || true && \
-    rm -rf src
 COPY src/ src/
-RUN cargo build --release && \
-    strip target/release/bngtester-client target/release/bngtester-server
+RUN cargo build --release
 
 FROM alpine:3.21
 
