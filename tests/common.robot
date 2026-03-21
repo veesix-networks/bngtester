@@ -9,7 +9,7 @@ Library             Process
 Library             Collections
 
 *** Variables ***
-${CLAB_BIN}             sudo containerlab
+${CLAB_BIN}             sudo -E containerlab
 ${runtime}              docker
 ${OSVBNG_API_PORT}      8080
 ${HEALTH_RETRIES}       12

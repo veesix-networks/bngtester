@@ -59,6 +59,14 @@ Send Signal To Container
     ...    sudo docker kill --signal ${signal} ${container}
     Should Be Equal As Integers    ${rc}    0
 
+Send Signal If Running
+    [Arguments]    ${container}    ${signal}=TERM
+    ${rc}    ${status} =    Run And Return Rc And Output
+    ...    sudo docker inspect -f '{{.State.Running}}' ${container}
+    IF    '${status.strip()}' == 'true'
+        Run And Return Rc And Output    sudo docker kill --signal ${signal} ${container}
+    END
+
 Wait For Container Exit
     [Arguments]    ${container}    ${timeout}=30
     ${rc}    ${output} =    Run And Return Rc And Output
@@ -70,6 +78,11 @@ Wait For Interface In Container
     [Arguments]    ${container}    ${iface}    ${retries}=12    ${interval}=5s
     Wait Until Keyword Succeeds    ${retries} x    ${interval}
     ...    Check Interface Exists    ${container}    ${iface}
+
+Wait Until Container Logs Contain
+    [Arguments]    ${container}    ${expected}    ${retries}=12    ${interval}=5s
+    Wait Until Keyword Succeeds    ${retries} x    ${interval}
+    ...    Check Container Log Contains    ${container}    ${expected}
 
 Run Subscriber Detached
     [Arguments]    ${name}    ${image}    ${env_args}    ${network}    ${caps}=--cap-add NET_ADMIN

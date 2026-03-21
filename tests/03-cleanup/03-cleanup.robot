@@ -27,21 +27,20 @@ SIGTERM Cleanup QinQ
     [Teardown]    Remove Container    ${PREFIX}-qinq
     ${id} =    Run Subscriber Detached    ${PREFIX}-qinq    ${SUBSCRIBER_IMAGE}
     ...    -e ENCAP=qinq -e SVLAN=100 -e CVLAN=10 -e DHCP_TIMEOUT=300    ${NET}
-    Wait For Interface In Container    ${PREFIX}-qinq    eth0.100.10
-    Send Signal To Container    ${PREFIX}-qinq    TERM
+    Wait Until Container Logs Contain    ${PREFIX}-qinq    Creating C-VLAN interface eth0.100.10
+    Send Signal If Running    ${PREFIX}-qinq    TERM
     ${exit_code} =    Wait For Container Exit    ${PREFIX}-qinq    30
-    Check Container Log Contains    ${PREFIX}-qinq    Creating C-VLAN
-    Check Container Log Contains    ${PREFIX}-qinq    Creating S-VLAN
+    Check Container Log Contains    ${PREFIX}-qinq    Creating S-VLAN interface eth0.100
 
 SIGTERM Cleanup Single VLAN
     [Documentation]    Start single-VLAN subscriber, send SIGTERM, verify cleanup.
     [Teardown]    Remove Container    ${PREFIX}-single
     ${id} =    Run Subscriber Detached    ${PREFIX}-single    ${SUBSCRIBER_IMAGE}
     ...    -e ENCAP=single -e CVLAN=100 -e DHCP_TIMEOUT=300    ${NET}
-    Wait For Interface In Container    ${PREFIX}-single    eth0.100
-    Send Signal To Container    ${PREFIX}-single    TERM
+    Wait Until Container Logs Contain    ${PREFIX}-single    Creating VLAN interface eth0.100
+    Send Signal If Running    ${PREFIX}-single    TERM
     ${exit_code} =    Wait For Container Exit    ${PREFIX}-single    30
-    Check Container Log Contains    ${PREFIX}-single    Creating VLAN interface
+    Check Container Log Contains    ${PREFIX}-single    Target interface: eth0.100
 
 DHCP Timeout Exit
     [Documentation]    Start with very short DHCP timeout. Verify container exits cleanly.

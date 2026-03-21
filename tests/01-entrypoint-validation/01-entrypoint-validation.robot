@@ -80,9 +80,9 @@ Missing NET_ADMIN Capability
     [Documentation]    VLAN creation requires NET_ADMIN. Without it, ip link add fails.
     ${name} =    Set Variable    ${PREFIX}-no-cap
     ${rc}    ${output} =    Run And Return Rc And Output
-    ...    sudo docker run --rm --name ${name} --network none -e ENCAP=single -e CVLAN=100 ${SUBSCRIBER_IMAGE} 2>&1
+    ...    sudo docker run --rm --name ${name} -e ENCAP=single -e CVLAN=100 -e IFACE_WAIT_TIMEOUT=5 ${SUBSCRIBER_IMAGE} 2>&1
     Should Not Be Equal As Integers    ${rc}    0
-    Should Contain    ${output}    failed
+    Should Contain    ${output}    Failed to bring up
 
 *** Keywords ***
 Cleanup All Containers

@@ -21,6 +21,7 @@ Force Tags          integration
 
 *** Variables ***
 ${SUBSCRIBER_IMAGE}    veesixnetworks/bngtester:alpine-latest
+${OSVBNG_IMAGE}        veesixnetworks/osvbng:latest
 ${lab-name}            bngtester
 ${lab-file}            ${CURDIR}/../../lab/bngtester.clab.yml
 ${bng1}                clab-${lab-name}-bng1
@@ -67,6 +68,7 @@ Iperf3 Throughput
 *** Keywords ***
 Deploy BNG Topology
     Set Environment Variable    BNGTESTER_IMAGE    ${SUBSCRIBER_IMAGE}
+    Set Environment Variable    OSVBNG_IMAGE    ${OSVBNG_IMAGE}
     Deploy Topology    ${lab-file}
 
 Destroy BNG Topology
