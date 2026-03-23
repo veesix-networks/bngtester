@@ -21,6 +21,7 @@ RUN apt-get update && \
     curl \
     ca-certificates \
     netbase \
+    tcpdump \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/bngtester-client /usr/local/bin/bngtester-client
