@@ -82,6 +82,14 @@ struct Cli {
     /// JUnit pass/fail threshold (repeatable). Format: key=value
     #[arg(long = "threshold", value_name = "KEY=VAL")]
     thresholds: Vec<String>,
+
+    /// DSCP codepoint for all data streams (e.g., EF, AF41, CS6, 46)
+    #[arg(long)]
+    dscp: Option<String>,
+
+    /// Per-stream DSCP override (repeatable). Format: ID=DSCP (e.g., 0=AF41)
+    #[arg(long = "stream-dscp", value_name = "ID=DSCP")]
+    stream_dscp: Vec<String>,
 }
 
 fn parse_mode(s: &str) -> TestMode {
@@ -136,9 +144,32 @@ async fn main() {
     let pattern = parse_pattern(&cli.pattern);
     let protocol = parse_protocol(&cli.protocol);
 
+    // Parse DSCP
+    let global_dscp = cli.dscp.as_ref().map(|s| {
+        bngtester::dscp::parse_dscp(s).unwrap_or_else(|e| {
+            eprintln!("bngtester-client: {e}");
+            std::process::exit(1);
+        })
+    });
+
+    let mut stream_dscp_overrides = Vec::new();
+    for s in &cli.stream_dscp {
+        match bngtester::dscp::parse_stream_dscp(s) {
+            Ok((id, dscp)) => stream_dscp_overrides.push((id, dscp)),
+            Err(e) => {
+                eprintln!("bngtester-client: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if let Some(d) = global_dscp {
+        eprintln!("bngtester-client: DSCP={} ({})", bngtester::dscp::dscp_name(d), d);
+    }
+
     eprintln!("bngtester-client: connecting to {}", cli.server);
 
-    match run_test(&cli, mode, pattern, protocol, &thresholds).await {
+    match run_test(&cli, mode, pattern, protocol, &thresholds, global_dscp, &stream_dscp_overrides).await {
         Ok(()) => {}
         Err(e) => {
             eprintln!("bngtester-client: error: {e}");
@@ -153,6 +184,8 @@ async fn run_test(
     pattern: TrafficPattern,
     protocol: Protocol,
     thresholds: &Thresholds,
+    global_dscp: Option<u8>,
+    stream_dscp_overrides: &[(u8, u8)],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cancel = CancellationToken::new();
 
@@ -180,6 +213,10 @@ async fn run_test(
         rrul_baseline_secs: cli.rrul_baseline,
         rrul_ramp_up_ms: cli.rrul_ramp_up,
         cross_host: cli.cross_host,
+        dscp: global_dscp,
+        stream_dscp: stream_dscp_overrides.iter().map(|(id, dscp)| {
+            bngtester::protocol::StreamDscpConfig { stream_id: *id, dscp: *dscp }
+        }).collect(),
     });
     protocol::write_message(&mut writer, &hello).await?;
 
@@ -253,6 +290,7 @@ async fn run_test(
             duration: Duration::from_secs(cli.duration as u64),
             packet_size: cli.size,
             pattern,
+            dscp: bngtester::dscp::resolve_stream_dscp(0, global_dscp, &stream_dscp_overrides),
         },
         gen_cancel,
     )
@@ -292,11 +330,16 @@ async fn run_test(
             0.0
         };
 
+        let stream_dscp = bngtester::dscp::resolve_stream_dscp(
+            sr.stream_id, global_dscp, &stream_dscp_overrides,
+        );
         report_streams.push(StreamReport {
             id: sr.stream_id,
             stream_type: "udp_latency".to_string(),
             direction: "upstream".to_string(),
             status: sr.status,
+            dscp: stream_dscp,
+            dscp_name: stream_dscp.map(bngtester::dscp::dscp_name),
             results: StreamResults {
                 packets_sent: Some(gen_result.packets_sent),
                 packets_received: Some(sr.packets_received),

@@ -48,6 +48,7 @@ pub struct UdpGeneratorConfig {
     pub duration: Duration,
     pub packet_size: usize,
     pub pattern: TrafficPattern,
+    pub dscp: Option<u8>,
 }
 
 /// Result from a completed UDP generator run.
@@ -62,8 +63,24 @@ pub async fn run_udp_generator(
     config: UdpGeneratorConfig,
     cancel: CancellationToken,
 ) -> std::io::Result<UdpGeneratorResult> {
-    let socket = UdpSocket::bind("0.0.0.0:0").await?;
-    socket.connect(config.target).await?;
+    let socket = if let Some(dscp) = config.dscp {
+        // Create via socket2 to set TOS before any packets are sent
+        let sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        crate::dscp::apply_dscp_to_socket(&sock, dscp, &config.target)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+        sock.bind(&socket2::SockAddr::from("0.0.0.0:0".parse::<SocketAddr>().unwrap()))?;
+        sock.connect(&socket2::SockAddr::from(config.target))?;
+        sock.set_nonblocking(true)?;
+        UdpSocket::from_std(std::net::UdpSocket::from(sock))?
+    } else {
+        let s = UdpSocket::bind("0.0.0.0:0").await?;
+        s.connect(config.target).await?;
+        s
+    };
 
     let mut seq: u32 = 0;
     let mut packets_sent: u64 = 0;

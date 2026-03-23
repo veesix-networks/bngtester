@@ -60,10 +60,15 @@ pub fn to_text_string(report: &TestReport) -> String {
             String::new()
         };
 
+        let dscp_info = match &stream.dscp_name {
+            Some(name) => format!(" DSCP={name}"),
+            None => String::new(),
+        };
+
         writeln!(
             out,
-            "  Stream {} [{} {}]{}",
-            stream.id, stream.stream_type, dir, rate_info
+            "  Stream {} [{} {}{}]{}",
+            stream.id, stream.stream_type, dir, dscp_info, rate_info
         )
         .unwrap();
 
@@ -127,6 +132,8 @@ mod tests {
                 stream_type: "udp_latency".to_string(),
                 direction: "upstream".to_string(),
                 status: StreamStatus::Complete,
+                dscp: None,
+                dscp_name: None,
                 results: StreamResults {
                     packets_sent: Some(1000),
                     packets_received: Some(998),
