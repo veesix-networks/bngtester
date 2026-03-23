@@ -344,11 +344,20 @@ async fn handle_session(
             client: peer.to_string(),
             server: cli.listen.to_string(),
         },
-        streams: vec![StreamReport {
+        streams: {
+        // Resolve DSCP from hello config for stream 0
+        let stream_dscp_overrides: Vec<(u8, u8)> = hello.stream_dscp.iter()
+            .map(|sc| (sc.stream_id, sc.dscp))
+            .collect();
+        let s0_dscp = bngtester::dscp::resolve_stream_dscp(0, hello.dscp, &stream_dscp_overrides);
+
+        vec![StreamReport {
             id: stream_result.stream_id,
             stream_type: "udp_latency".to_string(),
             direction: "upstream".to_string(),
             status: stream_result.status,
+            dscp: s0_dscp,
+            dscp_name: s0_dscp.map(bngtester::dscp::dscp_name),
             results: StreamResults {
                 packets_sent: None,
                 packets_received: Some(stream_result.packets_received),
@@ -371,7 +380,7 @@ async fn handle_session(
                 goodput_bps: None,
                 tcp_info: None,
             },
-        }],
+        }]},
         bufferbloat: None,
         time_series: ts,
         histogram: Some(hist_report),

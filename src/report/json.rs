@@ -38,6 +38,8 @@ mod tests {
                 stream_type: "udp_latency".to_string(),
                 direction: "upstream".to_string(),
                 status: StreamStatus::Complete,
+                dscp: None,
+                dscp_name: None,
                 results: StreamResults {
                     packets_sent: Some(1000),
                     packets_received: Some(999),

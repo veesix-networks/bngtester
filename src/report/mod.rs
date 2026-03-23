@@ -43,6 +43,10 @@ pub struct StreamReport {
     pub stream_type: String,
     pub direction: String,
     pub status: StreamStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dscp: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dscp_name: Option<String>,
     pub results: StreamResults,
 }
 

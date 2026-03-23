@@ -17,7 +17,8 @@ RUN apk add --no-cache \
     ppp-pppoe \
     iputils \
     iproute2 \
-    iperf3
+    iperf3 \
+    tcpdump
 
 COPY --from=builder /build/target/release/bngtester-client /usr/local/bin/bngtester-client
 COPY --from=builder /build/target/release/bngtester-server /usr/local/bin/bngtester-server

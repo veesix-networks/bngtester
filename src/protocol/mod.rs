@@ -34,6 +34,17 @@ pub struct HelloMsg {
     pub rrul_baseline_secs: u32,
     pub rrul_ramp_up_ms: u32,
     pub cross_host: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dscp: Option<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stream_dscp: Vec<StreamDscpConfig>,
+}
+
+/// DSCP override for a specific stream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamDscpConfig {
+    pub stream_id: u8,
+    pub dscp: u8,
 }
 
 /// Port assignment for a specific stream.
@@ -212,6 +223,8 @@ mod tests {
             rrul_baseline_secs: 5,
             rrul_ramp_up_ms: 100,
             cross_host: false,
+            dscp: None,
+            stream_dscp: vec![],
         });
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();

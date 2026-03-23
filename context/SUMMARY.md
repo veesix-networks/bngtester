@@ -22,6 +22,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [27-containerlab-topology](specs/27-containerlab-topology/) | [#27](https://github.com/veesix-networks/bngtester/issues/27) | Complete | Containerlab topology with osvbng BNG, bngtester subscriber, FRR server |
 | [5-rust-collector](specs/5-rust-collector/) | [#5](https://github.com/veesix-networks/bngtester/issues/5) | Complete | Rust collector — bngtester-server and bngtester-client binaries |
 | [13-robot-framework](specs/13-robot-framework/) | [#13](https://github.com/veesix-networks/bngtester/issues/13) | Complete | Robot Framework test runner with standalone + BNG integration tests |
+| [32-dscp-marking](specs/32-dscp-marking/) | [#32](https://github.com/veesix-networks/bngtester/issues/32) | Complete | DSCP/TOS marking on outgoing data stream packets |
 
 ## Spec Dependencies
 
@@ -128,6 +129,13 @@ Decisions that affect future specs. Read these before proposing new work.
 - **jemallocator for musl static binaries.** Musl's default allocator is a bottleneck at high packet rates. All binaries use jemalloc as the global allocator.
 - **Multi-stage Docker builds with dependency caching.** Dockerfiles copy Cargo.toml/Cargo.lock first, do a dummy build to cache deps, then copy src/ for the real build. Build context changed from `images/` to repo root. `.dockerignore` excludes `.git/`, `context/`, `target/`.
 - **Sequence number wrap-around at u32.** At 10Gbps with 64-byte packets, u32 wraps in ~5 minutes. Loss/reorder detection treats gaps > u32::MAX/2 as wraps.
+
+### From 32-dscp-marking
+
+- **DSCP set via socket2 before connect/send.** TCP sockets use create→set_tos→connect pattern so the SYN carries the marking. UDP sockets set TOS before any data is sent. Fail-fast if setsockopt fails — no silent fallback to best-effort.
+- **Data streams only, not control channel.** DSCP marking targets test traffic only. Control channel TCP is not marked.
+- **IPv4-only with explicit assertion.** IPv6 endpoints with `--dscp` produce a clear error. `IPV6_TCLASS` support is a future enhancement.
+- **Per-stream DSCP overrides.** `--stream-dscp 0=AF41 --stream-dscp 1=BE` allows different traffic classes per stream. Config sent to server via hello message for reverse-path streams and report labeling.
 
 ### From 27-containerlab-topology
 
