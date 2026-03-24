@@ -25,6 +25,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [32-dscp-marking](specs/32-dscp-marking/) | [#32](https://github.com/veesix-networks/bngtester/issues/32) | Complete | DSCP/TOS marking on outgoing data stream packets |
 | [33-ecn-marking](specs/33-ecn-marking/) | [#33](https://github.com/veesix-networks/bngtester/issues/33) | Complete | ECN marking and CE detection on test traffic |
 | [34-per-stream-config](specs/34-per-stream-config/) | [#34](https://github.com/veesix-networks/bngtester/issues/34) | Complete | Per-stream size, rate, pattern overrides |
+| [35-multi-subscriber](specs/35-multi-subscriber/) | [#35](https://github.com/veesix-networks/bngtester/issues/35) | Complete | Multi-subscriber concurrent sessions with combined reports |
 
 ## Spec Dependencies
 
@@ -138,6 +139,14 @@ Decisions that affect future specs. Read these before proposing new work.
 - **Data streams only, not control channel.** DSCP marking targets test traffic only. Control channel TCP is not marked.
 - **IPv4-only with explicit assertion.** IPv6 endpoints with `--dscp` produce a clear error. `IPV6_TCLASS` support is a future enhancement.
 - **Per-stream DSCP overrides.** `--stream-dscp 0=AF41 --stream-dscp 1=BE` allows different traffic classes per stream. Config sent to server via hello message for reverse-path streams and report labeling.
+
+### From 35-multi-subscriber
+
+- **Server handles concurrent sessions via JoinSet.** Each session spawned as a tokio task with owned `Arc<ServerConfig>`. JoinSet provides supervision — panicked/failed tasks detected.
+- **SessionRegistry tracks completed sessions.** Combined report waits for `--max-clients N` or `--timeout`. Failed sessions included with partial metrics.
+- **Writer lock for concurrent stdout.** Per-session mode serializes stdout via `Arc<Mutex<()>>`. `--file` uses per-client naming (`{base}-{client_id}.{ext}`).
+- **Client identified by `--client-id` or source IP:port.** Duplicate IDs get `-N` suffix. ID appears in combined report per-client sections.
+- **Combined report formats.** `write_combined_json/text/junit()` — each client as a section/testsuite. Single-client without `--combined` works identically to before.
 
 ### From 34-per-stream-config
 

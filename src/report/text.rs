@@ -5,7 +5,7 @@
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 
-use crate::report::TestReport;
+use crate::report::{CombinedReport, TestReport};
 
 /// Write a human-readable text report to the given writer.
 pub fn write_text<W: Write>(writer: &mut W, report: &TestReport) -> std::io::Result<()> {
@@ -135,6 +135,41 @@ pub fn to_text_string(report: &TestReport) -> String {
             writeln!(out, "    Throughput: {:.1} Mbps", bps as f64 / 1_000_000.0).unwrap();
         }
 
+        writeln!(out).unwrap();
+    }
+
+    out
+}
+
+/// Write a combined multi-client text report to the given writer.
+pub fn write_combined_text<W: Write>(
+    writer: &mut W,
+    report: &CombinedReport,
+) -> std::io::Result<()> {
+    let text = to_combined_text_string(report);
+    writer.write_all(text.as_bytes())
+}
+
+/// Render a combined multi-client text report as a String.
+pub fn to_combined_text_string(report: &CombinedReport) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "bngtester combined report — {} clients",
+        report.total_clients
+    )
+    .unwrap();
+    writeln!(out, "{}", "═".repeat(50)).unwrap();
+    writeln!(out).unwrap();
+
+    for cr in &report.clients {
+        writeln!(
+            out,
+            "── client: {} (peer: {}) ──",
+            cr.client_id, cr.peer
+        )
+        .unwrap();
+        out.push_str(&to_text_string(&cr.report));
         writeln!(out).unwrap();
     }
 
