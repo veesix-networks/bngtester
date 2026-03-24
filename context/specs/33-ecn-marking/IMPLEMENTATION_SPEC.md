@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add ECN (Explicit Congestion Notification) support to bngtester. The client sets ECN-capable transport bits (ECT(0) or ECT(1)) on outgoing UDP packets. The server detects ECN-CE (Congestion Experienced) marks on received packets via `IP_RECVTOS` and `recvmsg` ancillary data. ECN metrics are reported alongside existing latency/jitter/loss metrics. This validates that the BNG's AQM (CoDel, FQ-CoDel, PIE) signals congestion via CE marking rather than dropping packets.
+Add ECN (Explicit Congestion Notification) support to bngtester. The client sets ECN-capable transport bits (ECT(0) or ECT(1)) on outgoing UDP packets. The server detects ECN state on received packets via `IP_RECVTOS` and `recvmsg` ancillary data, tracking all four ECN codepoints (Not-ECT, ECT(0), ECT(1), CE). This validates that the BNG's AQM (CoDel, FQ-CoDel, PIE) signals congestion via CE marking rather than dropping packets, and detects BNG misconfiguration that strips ECN bits.
 
 ## Source Issue
 
@@ -32,11 +32,11 @@ ECN field values:
   11 = CE (Congestion Experienced)
 ```
 
-The sender marks packets as ECN-capable (ECT(0) or ECT(1)). Routers/BNGs with AQM can set the CE bits instead of dropping the packet when queues build up. The receiver detects CE marks and reports them.
+The sender marks packets as ECN-capable (ECT(0) or ECT(1)). Routers/BNGs with AQM can set the CE bits instead of dropping the packet when queues build up. The receiver detects CE marks and reports them. If ECT packets arrive as Not-ECT, the BNG is stripping ECN — a misconfiguration.
 
 ### Sender-Side: Setting ECN Bits
 
-The existing `dscp_to_tos()` must be updated to combine DSCP and ECN:
+The existing `dscp_to_tos()` is replaced by `build_tos()` which combines DSCP and ECN:
 
 ```rust
 pub fn build_tos(dscp: Option<u8>, ecn: EcnMode) -> u8 {
@@ -50,32 +50,40 @@ pub fn build_tos(dscp: Option<u8>, ecn: EcnMode) -> u8 {
 }
 ```
 
-This replaces the current `dscp_to_tos()` which only handled DSCP. The socket's `IP_TOS` is set once with both DSCP and ECN bits combined.
+All callers (UDP/TCP generators) are updated to pass both DSCP and ECN to `build_tos()`. The socket's `IP_TOS` is set once with the combined byte.
 
-### Receiver-Side: Detecting CE Marks
+### Receiver-Side: Detecting ECN State
 
 To read the TOS byte of received packets, the receiver must:
 
-1. Enable `IP_RECVTOS` on the UDP socket via `setsockopt`.
-2. Use `recvmsg` instead of `recv_from` to get ancillary data (cmsg).
-3. Extract the `IP_TOS` value from the `IP_TOS` cmsg.
-4. Check if ECN bits are `11` (CE).
+1. Enable `IP_RECVTOS` on the UDP socket via `setsockopt`. **Fail-fast:** If `IP_RECVTOS` cannot be enabled and ECN observation was requested, fail the receiver setup before the test starts.
+2. Use tokio-safe `recvmsg` via `UdpSocket::readable().await` + `try_io()` wrapping raw `libc::recvmsg`. This preserves async cancellation — the receiver can still be cancelled via `CancellationToken` while waiting for readiness. **Never call blocking `libc::recvmsg` directly** inside a tokio task without readiness gating.
+3. Extract the `IP_TOS` value from the `IPPROTO_IP / IP_TOS` control message. The cmsg data is a `libc::c_int` (not a single byte) — cast to `u8` after extraction.
+4. Classify the ECN bits (bottom 2 bits of TOS):
+   - `00` = Not-ECT
+   - `01` = ECT(1)
+   - `10` = ECT(0)
+   - `11` = CE
 
-On Linux, `recvmsg` returns the TOS byte in a `IPPROTO_IP / IP_TOS` control message. This requires using raw `libc::recvmsg` since tokio's `UdpSocket::recv_from` doesn't expose ancillary data.
-
-**Implementation approach:** Use `socket2::Socket` for the receiver socket with `set_recv_tos(true)` to enable `IP_RECVTOS`. Then use tokio's `AsyncFd` wrapper to do async `recvmsg` calls that read the cmsg data.
-
-Alternatively, since the server receiver loop already uses a pre-bound `UdpSocket`, we can call `libc::recvmsg` on the raw fd when the socket is readable. This is simpler than switching to `AsyncFd` — we just replace the `recv_from` call with a `recvmsg` wrapper.
+**Missing cmsg handling:** If `IP_RECVTOS` was enabled but a packet arrives without a `IP_TOS` cmsg, that packet's ECN state is counted as `ecn_unknown`. The `ecn_ce_ratio` is only computed from packets with known ECN state. If all packets lack cmsg, the ECN metrics are omitted from the report (not reported as zero).
 
 ### ECN Metrics
 
-New metrics tracked per stream:
+New metrics tracked per stream, covering all four ECN codepoints:
 
 | Metric | Description |
 |--------|-------------|
-| `ecn_ect_sent` | Packets sent with ECT(0) or ECT(1) — always equals packets_sent when ECN is enabled |
-| `ecn_ce_received` | Packets received with CE mark (ECN bits = 11) |
-| `ecn_ce_ratio` | `ecn_ce_received / packets_received * 100` — percentage of packets marked congested |
+| `ecn_ect_sent` | Packets sent with ECT(0) or ECT(1) — equals packets_sent when ECN is enabled |
+| `ecn_not_ect_received` | Received packets with ECN=00 (BNG stripped ECN if sender set ECT) |
+| `ecn_ect0_received` | Received packets with ECN=10 (ECT(0) preserved) |
+| `ecn_ect1_received` | Received packets with ECN=01 (ECT(1) preserved) |
+| `ecn_ce_received` | Received packets with ECN=11 (congestion experienced) |
+| `ecn_ce_ratio` | `ecn_ce_received / (total observed) * 100` |
+
+Tracking all four states lets the test runner detect:
+- **CE marks** — AQM is signaling congestion (expected under load)
+- **ECN stripping** — BNG re-marked ECT to Not-ECT (misconfiguration)
+- **ECN preservation** — ECT bits passed through unchanged (correct behavior when not congested)
 
 ### Control Protocol Changes
 
@@ -84,18 +92,38 @@ Add ECN config to `HelloMsg`:
 ```rust
 pub struct HelloMsg {
     // ... existing fields ...
-    pub ecn: Option<String>,  // "ect0", "ect1", or null
+    pub ecn: Option<String>,  // "ect0", "ect1", or null (off)
+}
+```
+
+Add ECN observation fields to `StreamResult`:
+
+```rust
+pub struct StreamResult {
+    // ... existing fields ...
+    pub ecn_not_ect: Option<u64>,
+    pub ecn_ect0: Option<u64>,
+    pub ecn_ect1: Option<u64>,
+    pub ecn_ce: Option<u64>,
 }
 ```
 
 ### Report Changes
 
-Add ECN fields to `StreamResults` with `skip_serializing_if`:
+Add ECN fields to `StreamReport` and `StreamResults` with `skip_serializing_if`. All ECN report fields are **omitted** (not zero) when ECN is disabled or observation is unavailable. Zero values mean "observed zero of that ECN codepoint", not "ECN not observed".
 
 ```rust
+pub struct StreamReport {
+    // ... existing fields ...
+    pub ecn_mode: Option<String>,  // "ect0", "ect1", or omitted
+}
+
 pub struct StreamResults {
     // ... existing fields ...
     pub ecn_ect_sent: Option<u64>,
+    pub ecn_not_ect_received: Option<u64>,
+    pub ecn_ect0_received: Option<u64>,
+    pub ecn_ect1_received: Option<u64>,
     pub ecn_ce_received: Option<u64>,
     pub ecn_ce_ratio: Option<f64>,
 }
@@ -105,57 +133,62 @@ Text output:
 ```
   Stream 0 [UDP latency ↑ DSCP=EF ECN=ECT0] 100pps
     ...
-    ECN CE:   0.5% (5/1000)
+    ECN:      CE=5 (0.5%) ECT0=990 ECT1=0 Not-ECT=5
 ```
 
-### CLI Flags
+### CLI Flag
+
+Single `--ecn <MODE>` flag replacing the two mutually exclusive flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--ecn` | _(off)_ | Enable ECN with ECT(0) on outgoing packets |
-| `--ecn-ect1` | _(off)_ | Enable ECN with ECT(1) instead of ECT(0) |
+| `--ecn <MODE>` | _(off)_ | Enable ECN. MODE: `ect0` or `ect1` |
 
-`--ecn` and `--ecn-ect1` are mutually exclusive. ECN is combined with `--dscp` if both are set.
+Combined with `--dscp` if both set: `--dscp EF --ecn ect0` → TOS = 0xBA.
 
 ## File Plan
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `src/dscp.rs` | Modify | Add `EcnMode` enum, `build_tos()` replacing `dscp_to_tos()`, `recvmsg` wrapper to extract TOS from cmsg |
-| `src/protocol/mod.rs` | Modify | Add `ecn` field to `HelloMsg`, add ECN fields to `StreamResult` |
-| `src/traffic/generator.rs` | Modify | Pass combined TOS (DSCP+ECN) to socket |
-| `src/traffic/tcp.rs` | Modify | Pass combined TOS (DSCP+ECN) to socket |
-| `src/bin/client.rs` | Modify | Add `--ecn` and `--ecn-ect1` CLI flags, combine with DSCP |
-| `src/bin/server.rs` | Modify | Enable `IP_RECVTOS`, use recvmsg, count CE marks, include in report |
-| `src/report/mod.rs` | Modify | Add `ecn_ect_sent`, `ecn_ce_received`, `ecn_ce_ratio` to `StreamResults`, ECN mode to `StreamReport` |
-| `src/report/text.rs` | Modify | Show ECN mode in stream header, CE ratio in metrics |
+| `src/dscp.rs` | Modify | Add `EcnMode` enum, `build_tos()` replacing `dscp_to_tos()`, `recvmsg_tos()` wrapper with tokio readiness integration, `enable_recv_tos()` helper |
+| `src/protocol/mod.rs` | Modify | Add `ecn` field to `HelloMsg`, add ECN observation fields to `StreamResult` |
+| `src/traffic/generator.rs` | Modify | Pass combined TOS (DSCP+ECN) via `build_tos()` |
+| `src/traffic/tcp.rs` | Modify | Pass combined TOS (DSCP+ECN) via `build_tos()` |
+| `src/traffic/receiver.rs` | Modify | Enable `IP_RECVTOS`, switch to `recvmsg` via tokio `readable()` + `try_io()`, track all 4 ECN states, add ECN counters to `UdpReceiverResult` |
+| `src/bin/client.rs` | Modify | Add `--ecn <MODE>` CLI flag, combine with DSCP via `build_tos()` |
+| `src/bin/server.rs` | Modify | Enable `IP_RECVTOS` on receiver socket, switch to `recvmsg`, track ECN states, include in report |
+| `src/report/mod.rs` | Modify | Add ECN fields to `StreamReport` and `StreamResults` with `skip_serializing_if` |
+| `src/report/text.rs` | Modify | Show ECN mode in stream header, ECN breakdown in metrics |
 | `src/report/json.rs` | Modify | Update test constructors |
 | `src/report/junit.rs` | Modify | Update test constructors |
 
 ## Implementation Order
 
-1. `src/dscp.rs` — `EcnMode` enum, `build_tos()`, `recvmsg_tos()` wrapper
+1. `src/dscp.rs` — `EcnMode` enum, `build_tos()`, `enable_recv_tos()`, `recvmsg_tos()` with tokio-safe readiness wrapping, cmsg parsing as `c_int`
 2. Protocol changes — ECN in `HelloMsg` and `StreamResult`
-3. Generator changes — pass combined TOS byte
-4. Receiver changes — enable `IP_RECVTOS`, use recvmsg, count CE marks
-5. CLI changes — `--ecn` and `--ecn-ect1` flags
-6. Report changes — ECN metrics in StreamResults and text/JSON output
+3. Generator changes — pass combined TOS byte via `build_tos()`
+4. Receiver changes — both `src/traffic/receiver.rs` and `src/bin/server.rs`: enable `IP_RECVTOS`, switch to `recvmsg`, track all 4 ECN states, handle missing cmsg
+5. CLI changes — `--ecn <MODE>` flag
+6. Report changes — ECN metrics in StreamReport/StreamResults and text/JSON output, omitted when ECN disabled
 
 ## Testing
 
 - [ ] `build_tos()` combines DSCP and ECN correctly (DSCP=46 + ECT0 = 0xBA)
-- [ ] `--ecn` sets ECT(0) bits on outgoing packets
-- [ ] `--ecn-ect1` sets ECT(1) bits on outgoing packets
-- [ ] `--ecn` and `--ecn-ect1` are mutually exclusive
-- [ ] `--dscp EF --ecn` combines correctly (TOS = 0xBA)
-- [ ] `IP_RECVTOS` enabled on receiver socket
-- [ ] `recvmsg` extracts TOS byte from cmsg
-- [ ] CE mark detection: ECN bits = 11 counted correctly
-- [ ] ECN metrics in JSON report (ecn_ect_sent, ecn_ce_received, ecn_ce_ratio)
+- [ ] `EcnMode` parsing: "ect0", "ect1", invalid strings rejected
+- [ ] `--ecn ect0` sets ECT(0) bits on outgoing packets
+- [ ] `--ecn ect1` sets ECT(1) bits on outgoing packets
+- [ ] `--dscp EF --ecn ect0` combines correctly (TOS = 0xBA)
+- [ ] `IP_RECVTOS` enabled on receiver socket — fail-fast if unsupported
+- [ ] `recvmsg` extracts TOS byte from cmsg (parsed as `c_int`)
+- [ ] All 4 ECN states tracked: Not-ECT, ECT(0), ECT(1), CE
+- [ ] Missing cmsg → counted as unknown, CE ratio excludes unknowns
+- [ ] ECN metrics in JSON report (all fields, omitted when ECN off)
 - [ ] ECN mode shown in text report stream header
-- [ ] CE ratio shown in text report metrics
-- [ ] No ECN flag = default behavior (ECN bits = 00, no ECN in report)
+- [ ] ECN breakdown shown in text report metrics
+- [ ] No ECN flag = default behavior (no ECN in report, fields omitted)
 - [ ] JSON output without ECN unchanged (backward compatible)
+- [ ] `src/traffic/receiver.rs` updated with ECN support (not left stale)
+- [ ] Negative test: `IP_RECVTOS` failure produces clear error
 - [ ] `cargo test` passes all existing + new tests
 - [ ] [MANUAL] End-to-end: tcpdump confirms ECN bits on wire through BNG
 
@@ -165,3 +198,4 @@ Text output:
 - L2 ECN transparency
 - Verifying BNG AQM policy (test/assertion concern — the tool reports CE marks, the test runner validates)
 - IPv6 ECN (same constraint as DSCP — IPv4-only for now)
+- Received DSCP verification (separate follow-up — same recvmsg path but different scope)
