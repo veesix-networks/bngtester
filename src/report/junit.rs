@@ -5,7 +5,7 @@
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 
-use crate::report::{TestReport, Thresholds};
+use crate::report::{CombinedReport, TestReport, Thresholds};
 
 /// A single JUnit test case result.
 struct TestCase {
@@ -200,6 +200,50 @@ pub fn to_junit_string(report: &TestReport, thresholds: &Thresholds) -> String {
     }
 
     writeln!(xml, "  </testsuite>").unwrap();
+    writeln!(xml, "</testsuites>").unwrap();
+    xml
+}
+
+/// Write a combined multi-client JUnit XML report to the given writer.
+pub fn write_combined_junit<W: Write>(
+    writer: &mut W,
+    report: &CombinedReport,
+    thresholds: &Thresholds,
+) -> std::io::Result<()> {
+    let xml = to_combined_junit_string(report, thresholds);
+    writer.write_all(xml.as_bytes())
+}
+
+/// Render a combined multi-client JUnit XML report as a String.
+/// Each client becomes a separate testsuite element.
+pub fn to_combined_junit_string(report: &CombinedReport, thresholds: &Thresholds) -> String {
+    let mut xml = String::new();
+    writeln!(xml, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>").unwrap();
+    writeln!(xml, "<testsuites>").unwrap();
+
+    for cr in &report.clients {
+        let per_client = to_junit_string(&cr.report, thresholds);
+        // Extract the inner <testsuite> from the per-client output, skipping
+        // the <?xml?> header and the outer <testsuites> wrapper.
+        for line in per_client.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("<?xml") || trimmed == "<testsuites>" || trimmed == "</testsuites>" {
+                continue;
+            }
+            // Rewrite testsuite name to include client_id
+            if trimmed.starts_with("<testsuite name=\"") {
+                let rewritten = line.replacen(
+                    "<testsuite name=\"",
+                    &format!("<testsuite name=\"{}/", escape_xml(&cr.client_id)),
+                    1,
+                );
+                writeln!(xml, "{rewritten}").unwrap();
+            } else {
+                writeln!(xml, "{line}").unwrap();
+            }
+        }
+    }
+
     writeln!(xml, "</testsuites>").unwrap();
     xml
 }

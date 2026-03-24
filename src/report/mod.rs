@@ -115,6 +115,22 @@ pub struct HistogramReport {
     pub counts: Vec<u64>,
 }
 
+/// Combined report from multiple client sessions.
+#[derive(Debug, Clone, Serialize)]
+pub struct CombinedReport {
+    pub combined: bool,
+    pub total_clients: usize,
+    pub clients: Vec<ClientReport>,
+}
+
+/// Per-client report within a combined multi-subscriber report.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientReport {
+    pub client_id: String,
+    pub peer: String,
+    pub report: TestReport,
+}
+
 /// Threshold configuration for JUnit pass/fail.
 #[derive(Debug, Clone, Default)]
 pub struct Thresholds {

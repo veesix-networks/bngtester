@@ -4,7 +4,7 @@
 
 use std::io::Write;
 
-use crate::report::TestReport;
+use crate::report::{CombinedReport, TestReport};
 
 /// Write a full JSON report to the given writer.
 pub fn write_json<W: Write>(writer: &mut W, report: &TestReport) -> std::io::Result<()> {
@@ -15,6 +15,15 @@ pub fn write_json<W: Write>(writer: &mut W, report: &TestReport) -> std::io::Res
 /// Render a full JSON report to a String.
 pub fn to_json_string(report: &TestReport) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(report)
+}
+
+/// Write a combined multi-client JSON report to the given writer.
+pub fn write_combined_json<W: Write>(
+    writer: &mut W,
+    report: &CombinedReport,
+) -> std::io::Result<()> {
+    serde_json::to_writer_pretty(writer, report)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
 #[cfg(test)]

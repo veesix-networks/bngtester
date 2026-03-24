@@ -109,6 +109,10 @@ struct Cli {
     /// ECN mode for outgoing packets (ect0 or ect1)
     #[arg(long)]
     ecn: Option<String>,
+
+    /// Client identifier for multi-subscriber coordination
+    #[arg(long)]
+    client_id: Option<String>,
 }
 
 fn parse_mode(s: &str) -> TestMode {
@@ -328,6 +332,7 @@ async fn run_test(
         dscp: global_dscp,
         stream_config,
         ecn: ecn_mode.name().map(|s| s.to_string()),
+        client_id: cli.client_id.clone(),
     });
     protocol::write_message(&mut writer, &hello).await?;
 

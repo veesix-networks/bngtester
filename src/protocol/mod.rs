@@ -40,6 +40,8 @@ pub struct HelloMsg {
     pub stream_config: Vec<StreamConfigOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ecn: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 /// Per-stream configuration override. Only overridden fields are set.
@@ -243,6 +245,7 @@ mod tests {
             dscp: None,
             stream_config: vec![],
             ecn: None,
+            client_id: None,
         });
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();
