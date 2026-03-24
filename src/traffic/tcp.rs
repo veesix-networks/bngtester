@@ -87,7 +87,7 @@ pub struct TcpGeneratorConfig {
     pub stream_id: u8,
     pub duration: Duration,
     pub connect_timeout: Duration,
-    pub dscp: Option<u8>,
+    pub tos: Option<u8>,
 }
 
 /// Result from a completed TCP generator run.
@@ -102,14 +102,14 @@ pub async fn run_tcp_generator(
     config: TcpGeneratorConfig,
     cancel: CancellationToken,
 ) -> std::io::Result<TcpGeneratorResult> {
-    let stream = if let Some(dscp) = config.dscp {
-        // Create via socket2: set TOS before connect so SYN carries the DSCP marking
+    let stream = if let Some(tos) = config.tos {
+        // Create via socket2: set TOS before connect so SYN carries the DSCP+ECN marking
         let sock = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::STREAM,
             Some(socket2::Protocol::TCP),
         )?;
-        crate::dscp::apply_dscp_to_socket(&sock, dscp, &config.target)
+        crate::dscp::apply_tos_to_fd(sock.as_raw_fd(), tos)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         sock.set_nonblocking(true)?;
         // Connect via socket2 (non-blocking, so returns WouldBlock immediately)

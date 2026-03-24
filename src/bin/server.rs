@@ -115,10 +115,25 @@ async fn handle_session(
         hello.mode, hello.duration_secs, hello.streams_per_direction
     );
 
+    // --- Parse ECN config from hello ---
+    let ecn_requested = hello.ecn.is_some();
+    let ecn_mode_name = hello.ecn.clone();
+
     // --- Allocate UDP receiver port ---
     // Pre-bind UDP socket so we know the port before sending Ready
     let udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
     let udp_port = udp_socket.local_addr()?.port();
+
+    // Enable IP_RECVTOS if ECN was requested
+    if ecn_requested {
+        use std::os::unix::io::AsRawFd;
+        let fd = udp_socket.as_raw_fd();
+        bngtester::dscp::enable_recv_tos(fd)
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
+            })?;
+        eprintln!("bngtester-server: IP_RECVTOS enabled for ECN tracking");
+    }
 
     // --- Send Ready with port assignments ---
     // For now, TCP throughput streams connect directly to ephemeral ports.
@@ -184,46 +199,115 @@ async fn handle_session(
         let mut jitter = bngtester::metrics::jitter::JitterTracker::new();
         let mut throughput = bngtester::metrics::throughput::ThroughputTracker::new();
         let mut timeseries = bngtester::metrics::timeseries::TimeSeriesCollector::new();
+        let mut ecn_counters = bngtester::dscp::EcnCounters::default();
 
         let mut buf = vec![0u8; 65536];
 
-        loop {
-            tokio::select! {
-                _ = recv_cancel.cancelled() => break,
-                result = udp_socket.recv_from(&mut buf) => {
-                    match result {
-                        Ok((n, _src)) => {
-                            if n < bngtester::traffic::packet::HEADER_SIZE {
-                                continue;
+        if ecn_requested {
+            // ECN-aware receive path using recvmsg
+            use std::os::unix::io::AsRawFd;
+            use tokio::io::Interest;
+            let fd = udp_socket.as_raw_fd();
+
+            loop {
+                tokio::select! {
+                    _ = recv_cancel.cancelled() => break,
+                    result = udp_socket.readable() => {
+                        if result.is_err() {
+                            break;
+                        }
+                        match udp_socket.try_io(Interest::READABLE, || {
+                            bngtester::dscp::recvmsg_with_tos(fd, &mut buf)
+                        }) {
+                            Ok((n, tos_byte)) => {
+                                if n < bngtester::traffic::packet::HEADER_SIZE {
+                                    continue;
+                                }
+                                let header = match bngtester::traffic::packet::PacketHeader::read_from(&buf[..n]) {
+                                    Some(h) => h,
+                                    None => continue,
+                                };
+
+                                // Track ECN codepoint
+                                match tos_byte {
+                                    Some(tos) => {
+                                        let cp = bngtester::dscp::EcnCodepoint::from_tos(tos);
+                                        ecn_counters.record(cp);
+                                    }
+                                    None => {
+                                        ecn_counters.record_unknown();
+                                    }
+                                }
+
+                                let (recv_sec, recv_nsec) = bngtester::traffic::packet::clock_now();
+                                let recv_ns = recv_sec as u128 * 1_000_000_000 + recv_nsec as u128;
+                                let send_ns = header.timestamp_ns();
+
+                                let raw_latency = recv_ns as i128 - send_ns as i128;
+                                let corrected = clock_mode.correct_latency(raw_latency);
+                                let latency_ns = corrected.max(0) as f64;
+
+                                latency.record(latency_ns);
+                                histogram.record(latency_ns);
+                                jitter.record(latency_ns);
+                                loss.record(header.seq);
+                                throughput.record(n as u64, recv_ns);
+                                timeseries.record(recv_ns, n as u64, Some(latency_ns));
+
+                                if header.is_last() {
+                                    break;
+                                }
                             }
-                            let header = match bngtester::traffic::packet::PacketHeader::read_from(&buf[..n]) {
-                                Some(h) => h,
-                                None => continue,
-                            };
-
-                            let (recv_sec, recv_nsec) = bngtester::traffic::packet::clock_now();
-                            let recv_ns = recv_sec as u128 * 1_000_000_000 + recv_nsec as u128;
-                            let send_ns = header.timestamp_ns();
-
-                            let raw_latency = recv_ns as i128 - send_ns as i128;
-                            let corrected = clock_mode.correct_latency(raw_latency);
-                            let latency_ns = corrected.max(0) as f64;
-
-                            latency.record(latency_ns);
-                            histogram.record(latency_ns);
-                            jitter.record(latency_ns);
-                            loss.record(header.seq);
-                            throughput.record(n as u64, recv_ns);
-                            timeseries.record(recv_ns, n as u64, Some(latency_ns));
-
-                            if header.is_last() {
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                            Err(_) if recv_cancel.is_cancelled() => break,
+                            Err(e) => {
+                                eprintln!("bngtester-server: recv error: {e}");
                                 break;
                             }
                         }
-                        Err(_) if recv_cancel.is_cancelled() => break,
-                        Err(e) => {
-                            eprintln!("bngtester-server: recv error: {e}");
-                            break;
+                    }
+                }
+            }
+        } else {
+            // Standard receive path (no ECN tracking)
+            loop {
+                tokio::select! {
+                    _ = recv_cancel.cancelled() => break,
+                    result = udp_socket.recv_from(&mut buf) => {
+                        match result {
+                            Ok((n, _src)) => {
+                                if n < bngtester::traffic::packet::HEADER_SIZE {
+                                    continue;
+                                }
+                                let header = match bngtester::traffic::packet::PacketHeader::read_from(&buf[..n]) {
+                                    Some(h) => h,
+                                    None => continue,
+                                };
+
+                                let (recv_sec, recv_nsec) = bngtester::traffic::packet::clock_now();
+                                let recv_ns = recv_sec as u128 * 1_000_000_000 + recv_nsec as u128;
+                                let send_ns = header.timestamp_ns();
+
+                                let raw_latency = recv_ns as i128 - send_ns as i128;
+                                let corrected = clock_mode.correct_latency(raw_latency);
+                                let latency_ns = corrected.max(0) as f64;
+
+                                latency.record(latency_ns);
+                                histogram.record(latency_ns);
+                                jitter.record(latency_ns);
+                                loss.record(header.seq);
+                                throughput.record(n as u64, recv_ns);
+                                timeseries.record(recv_ns, n as u64, Some(latency_ns));
+
+                                if header.is_last() {
+                                    break;
+                                }
+                            }
+                            Err(_) if recv_cancel.is_cancelled() => break,
+                            Err(e) => {
+                                eprintln!("bngtester-server: recv error: {e}");
+                                break;
+                            }
                         }
                     }
                 }
@@ -240,6 +324,12 @@ async fn handle_session(
             p999: s.p999 / 1_000.0,
         });
 
+        let (ecn_not_ect, ecn_ect0, ecn_ect1, ecn_ce) = if ecn_requested {
+            (Some(ecn_counters.not_ect), Some(ecn_counters.ect0), Some(ecn_counters.ect1), Some(ecn_counters.ce))
+        } else {
+            (None, None, None, None)
+        };
+
         let stream_result = StreamResult {
             stream_id: 0,
             status: StreamStatus::Complete,
@@ -251,6 +341,10 @@ async fn handle_session(
             throughput_bps: throughput.bits_per_sec(),
             throughput_pps: throughput.packets_per_sec(),
             tcp_info: None,
+            ecn_not_ect,
+            ecn_ect0,
+            ecn_ect1,
+            ecn_ce,
         };
 
         let hist_report = HistogramReport {
@@ -358,6 +452,7 @@ async fn handle_session(
             status: stream_result.status,
             dscp: s0_dscp,
             dscp_name: s0_dscp.map(bngtester::dscp::dscp_name),
+            ecn_mode: ecn_mode_name.clone(),
             results: StreamResults {
                 packets_sent: None,
                 packets_received: Some(stream_result.packets_received),
@@ -379,6 +474,22 @@ async fn handle_session(
                 throughput_pps: Some(stream_result.throughput_pps),
                 goodput_bps: None,
                 tcp_info: None,
+                ecn_ect_sent: None,
+                ecn_not_ect_received: stream_result.ecn_not_ect,
+                ecn_ect0_received: stream_result.ecn_ect0,
+                ecn_ect1_received: stream_result.ecn_ect1,
+                ecn_ce_received: stream_result.ecn_ce,
+                ecn_ce_ratio: {
+                    let total = stream_result.ecn_not_ect.unwrap_or(0)
+                        + stream_result.ecn_ect0.unwrap_or(0)
+                        + stream_result.ecn_ect1.unwrap_or(0)
+                        + stream_result.ecn_ce.unwrap_or(0);
+                    if total > 0 {
+                        Some(stream_result.ecn_ce.unwrap_or(0) as f64 / total as f64 * 100.0)
+                    } else {
+                        None
+                    }
+                },
             },
         }]},
         bufferbloat: None,

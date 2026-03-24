@@ -47,6 +47,8 @@ pub struct StreamReport {
     pub dscp: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dscp_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ecn_mode: Option<String>,
     pub results: StreamResults,
 }
 
@@ -76,6 +78,18 @@ pub struct StreamResults {
     pub goodput_bps: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tcp_info: Option<TcpStats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ecn_ect_sent: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ecn_not_ect_received: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ecn_ect0_received: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ecn_ect1_received: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ecn_ce_received: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ecn_ce_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
