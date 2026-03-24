@@ -37,16 +37,23 @@ pub struct HelloMsg {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dscp: Option<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stream_dscp: Vec<StreamDscpConfig>,
+    pub stream_config: Vec<StreamConfigOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ecn: Option<String>,
 }
 
-/// DSCP override for a specific stream.
+/// Per-stream configuration override. Only overridden fields are set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StreamDscpConfig {
+pub struct StreamConfigOverride {
     pub stream_id: u8,
-    pub dscp: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_pps: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<TrafficPattern>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dscp: Option<u8>,
 }
 
 /// Port assignment for a specific stream.
@@ -234,7 +241,7 @@ mod tests {
             rrul_ramp_up_ms: 100,
             cross_host: false,
             dscp: None,
-            stream_dscp: vec![],
+            stream_config: vec![],
             ecn: None,
         });
         let mut buf = Vec::new();

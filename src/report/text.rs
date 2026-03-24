@@ -70,10 +70,22 @@ pub fn to_text_string(report: &TestReport) -> String {
             None => String::new(),
         };
 
+        let config_info = match &stream.config {
+            Some(cfg) => {
+                let rate_str = if cfg.rate_pps == 0 {
+                    "unlimited".to_string()
+                } else {
+                    format!("{}pps", cfg.rate_pps)
+                };
+                format!(" {}B@{} {}", cfg.size, rate_str, cfg.pattern)
+            }
+            None => String::new(),
+        };
+
         writeln!(
             out,
-            "  Stream {} [{} {}{}{}]{}",
-            stream.id, stream.stream_type, dir, dscp_info, ecn_info, rate_info
+            "  Stream {} [{} {}{}{}{}]{}",
+            stream.id, stream.stream_type, dir, dscp_info, ecn_info, config_info, rate_info
         )
         .unwrap();
 
@@ -154,6 +166,7 @@ mod tests {
                 dscp: None,
                 dscp_name: None,
                 ecn_mode: None,
+                config: None,
                 results: StreamResults {
                     packets_sent: Some(1000),
                     packets_received: Some(998),

@@ -20,8 +20,10 @@ use bngtester::report::json::write_json;
 use bngtester::report::junit::write_junit;
 use bngtester::report::text::write_text;
 use bngtester::report::{
-    HistogramReport, StreamReport, StreamResults, TestConfig, TestReport, Thresholds,
+    HistogramReport, StreamConfigReport, StreamReport, StreamResults, TestConfig, TestReport,
+    Thresholds,
 };
+use bngtester::stream::config::StreamOverrides;
 
 #[derive(Parser)]
 #[command(name = "bngtester-server", about = "BNG test traffic receiver and measurement server")]
@@ -439,20 +441,48 @@ async fn handle_session(
             server: cli.listen.to_string(),
         },
         streams: {
-        // Resolve DSCP from hello config for stream 0
-        let stream_dscp_overrides: Vec<(u8, u8)> = hello.stream_dscp.iter()
-            .map(|sc| (sc.stream_id, sc.dscp))
-            .collect();
-        let s0_dscp = bngtester::dscp::resolve_stream_dscp(0, hello.dscp, &stream_dscp_overrides);
+        // Build stream overrides from hello config
+        let mut stream_overrides = StreamOverrides::default();
+        for sc in &hello.stream_config {
+            if let Some(size) = sc.size {
+                stream_overrides.sizes.push((sc.stream_id, size));
+            }
+            if let Some(rate) = sc.rate_pps {
+                stream_overrides.rates.push((sc.stream_id, rate));
+            }
+            if let Some(pat) = sc.pattern {
+                stream_overrides.patterns.push((sc.stream_id, pat));
+            }
+            if let Some(dscp) = sc.dscp {
+                stream_overrides.dscps.push((sc.stream_id, dscp));
+            }
+        }
+        let s0_resolved = stream_overrides.resolve(
+            0,
+            hello.packet_size,
+            hello.rate_pps,
+            hello.pattern,
+            hello.dscp,
+        );
+        let stream_config_report = if stream_overrides.has_overrides(0) {
+            Some(StreamConfigReport {
+                size: s0_resolved.size,
+                rate_pps: s0_resolved.rate_pps,
+                pattern: format!("{:?}", s0_resolved.pattern).to_lowercase(),
+            })
+        } else {
+            None
+        };
 
         vec![StreamReport {
             id: stream_result.stream_id,
             stream_type: "udp_latency".to_string(),
             direction: "upstream".to_string(),
             status: stream_result.status,
-            dscp: s0_dscp,
-            dscp_name: s0_dscp.map(bngtester::dscp::dscp_name),
+            dscp: s0_resolved.dscp,
+            dscp_name: s0_resolved.dscp.map(bngtester::dscp::dscp_name),
             ecn_mode: ecn_mode_name.clone(),
+            config: stream_config_report,
             results: StreamResults {
                 packets_sent: None,
                 packets_received: Some(stream_result.packets_received),
