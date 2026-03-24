@@ -180,11 +180,19 @@ Closes #<issue-number>
 - `context/specs/...` — spec, decisions, reviews
 
 ## Testing
-- [x] Test that was performed
-- [x] Another test
+- [ ] Test that needs to be verified
+- [ ] Another test
+- [ ] [MANUAL] Test requiring infrastructure (e.g., containerlab + BNG)
 
 🤖 <agent/tool attribution — e.g., "Generated with Claude Code", "Generated with Codex CLI", "Generated with n8n", or omit for human-authored PRs>
 ```
+
+**Testing is a pre-merge gate.** All test checkboxes must be executed and checked off (`[x]`) before the PR is merged. PRs with unchecked tests must not be merged.
+
+- Tests are created **unchecked** (`[ ]`) when the PR is opened.
+- The agent or human verifies each test and checks it off.
+- Tests that require infrastructure the agent cannot access (containerlab, BNG, external services) must be prefixed with `[MANUAL]` so a human knows to run them.
+- The PR description must be updated with checked tests **before requesting merge**.
 
 This template works for all issue types (feature, bug, enhancement, testing). For bug fixes that skip the spec workflow, omit the Spec and Spec artifacts sections. The attribution line identifies which agent or tool created the PR — omit it for human-authored PRs.
 
