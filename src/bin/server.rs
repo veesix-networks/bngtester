@@ -67,6 +67,10 @@ struct Cli {
     /// Timeout in seconds waiting for all clients (combined mode only)
     #[arg(long, default_value = "300")]
     timeout: u64,
+
+    /// Bind receiver UDP socket to a specific interface via SO_BINDTODEVICE
+    #[arg(long)]
+    data_bind_iface: Option<String>,
 }
 
 /// Server configuration extracted from CLI args.
@@ -81,6 +85,7 @@ struct ServerConfig {
     combined: bool,
     max_clients: usize,
     timeout_secs: u64,
+    data_bind_iface: Option<String>,
 }
 
 /// Registry of completed sessions for combined reporting.
@@ -159,6 +164,7 @@ async fn main() {
         combined: cli.combined,
         max_clients: cli.max_clients,
         timeout_secs: cli.timeout,
+        data_bind_iface: cli.data_bind_iface,
     });
 
     eprintln!("bngtester-server: listening on {}", config.listen);
@@ -440,7 +446,25 @@ async fn handle_session(
     let ecn_mode_name = hello.ecn.clone();
 
     // --- Allocate UDP receiver port ---
-    let udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
+    let udp_socket = if config.data_bind_iface.is_some() {
+        let sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        if let Some(ref iface) = config.data_bind_iface {
+            bngtester::socket::bind_to_device(&sock, iface)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    Box::new(std::io::Error::other(e))
+                })?;
+            eprintln!("bngtester-server: [{}] SO_BINDTODEVICE={}", client_id, iface);
+        }
+        sock.bind(&socket2::SockAddr::from("0.0.0.0:0".parse::<SocketAddr>().unwrap()))?;
+        sock.set_nonblocking(true)?;
+        UdpSocket::from_std(std::net::UdpSocket::from(sock))?
+    } else {
+        UdpSocket::bind("0.0.0.0:0").await?
+    };
     let udp_port = udp_socket.local_addr()?.port();
 
     if ecn_requested {
@@ -791,6 +815,8 @@ async fn handle_session(
                 dscp: s0_resolved.dscp,
                 dscp_name: s0_resolved.dscp.map(bngtester::dscp::dscp_name),
                 ecn_mode: ecn_mode_name.clone(),
+                bind_iface: hello.bind_iface.clone(),
+                source_ip: hello.source_ip.clone(),
                 config: stream_config_report,
                 results: StreamResults {
                     packets_sent: None,

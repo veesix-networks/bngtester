@@ -50,6 +50,8 @@ mod tests {
                 dscp: None,
                 dscp_name: None,
                 ecn_mode: None,
+                bind_iface: None,
+                source_ip: None,
                 config: None,
                 results: StreamResults {
                     packets_sent: Some(1000),

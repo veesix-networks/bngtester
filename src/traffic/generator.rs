@@ -49,6 +49,8 @@ pub struct UdpGeneratorConfig {
     pub packet_size: usize,
     pub pattern: TrafficPattern,
     pub tos: Option<u8>,
+    pub bind_iface: Option<String>,
+    pub source_ip: Option<std::net::IpAddr>,
 }
 
 /// Result from a completed UDP generator run.
@@ -63,17 +65,30 @@ pub async fn run_udp_generator(
     config: UdpGeneratorConfig,
     cancel: CancellationToken,
 ) -> std::io::Result<UdpGeneratorResult> {
-    let socket = if let Some(tos) = config.tos {
-        // Create via socket2 to set TOS before any packets are sent
+    let needs_socket2 = config.tos.is_some()
+        || config.source_ip.is_some()
+        || config.bind_iface.is_some();
+
+    let socket = if needs_socket2 {
         let sock = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::DGRAM,
             Some(socket2::Protocol::UDP),
         )?;
-        use std::os::unix::io::AsRawFd;
-        crate::dscp::apply_tos_to_fd(sock.as_raw_fd(), tos)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
-        sock.bind(&socket2::SockAddr::from("0.0.0.0:0".parse::<SocketAddr>().unwrap()))?;
+        crate::socket::setup_socket(
+            &sock,
+            config.bind_iface.as_deref(),
+            config.source_ip,
+            config.tos,
+        )
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let bind_addr = config
+            .source_ip
+            .map(|ip| SocketAddr::new(ip, 0))
+            .unwrap_or_else(|| "0.0.0.0:0".parse::<SocketAddr>().unwrap());
+        if config.source_ip.is_none() {
+            sock.bind(&socket2::SockAddr::from(bind_addr))?;
+        }
         sock.connect(&socket2::SockAddr::from(config.target))?;
         sock.set_nonblocking(true)?;
         UdpSocket::from_std(std::net::UdpSocket::from(sock))?

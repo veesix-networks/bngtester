@@ -88,6 +88,8 @@ pub struct TcpGeneratorConfig {
     pub duration: Duration,
     pub connect_timeout: Duration,
     pub tos: Option<u8>,
+    pub bind_iface: Option<String>,
+    pub source_ip: Option<std::net::IpAddr>,
 }
 
 /// Result from a completed TCP generator run.
@@ -102,17 +104,24 @@ pub async fn run_tcp_generator(
     config: TcpGeneratorConfig,
     cancel: CancellationToken,
 ) -> std::io::Result<TcpGeneratorResult> {
-    let stream = if let Some(tos) = config.tos {
-        // Create via socket2: set TOS before connect so SYN carries the DSCP+ECN marking
+    let needs_socket2 = config.tos.is_some()
+        || config.source_ip.is_some()
+        || config.bind_iface.is_some();
+
+    let stream = if needs_socket2 {
         let sock = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::STREAM,
             Some(socket2::Protocol::TCP),
         )?;
-        crate::dscp::apply_tos_to_fd(sock.as_raw_fd(), tos)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+        crate::socket::setup_socket(
+            &sock,
+            config.bind_iface.as_deref(),
+            config.source_ip,
+            config.tos,
+        )
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
         sock.set_nonblocking(true)?;
-        // Connect via socket2 (non-blocking, so returns WouldBlock immediately)
         let addr = socket2::SockAddr::from(config.target);
         match sock.connect(&addr) {
             Ok(()) => {}
@@ -121,7 +130,6 @@ pub async fn run_tcp_generator(
         }
         let std_stream: std::net::TcpStream = sock.into();
         let tokio_stream = TcpStream::from_std(std_stream)?;
-        // Wait for connect to complete
         tokio::time::timeout(config.connect_timeout, tokio_stream.writable())
             .await
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "TCP connect timeout"))??;

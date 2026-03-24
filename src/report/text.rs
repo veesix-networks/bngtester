@@ -70,6 +70,13 @@ pub fn to_text_string(report: &TestReport) -> String {
             None => String::new(),
         };
 
+        let bind_info = match (&stream.bind_iface, &stream.source_ip) {
+            (Some(iface), Some(ip)) => format!(" via {} ({})", iface, ip),
+            (Some(iface), None) => format!(" via {}", iface),
+            (None, Some(ip)) => format!(" via {}", ip),
+            (None, None) => String::new(),
+        };
+
         let config_info = match &stream.config {
             Some(cfg) => {
                 let rate_str = if cfg.rate_pps == 0 {
@@ -84,8 +91,8 @@ pub fn to_text_string(report: &TestReport) -> String {
 
         writeln!(
             out,
-            "  Stream {} [{} {}{}{}{}]{}",
-            stream.id, stream.stream_type, dir, dscp_info, ecn_info, config_info, rate_info
+            "  Stream {} [{} {}{}{}{}{}]{}",
+            stream.id, stream.stream_type, dir, dscp_info, ecn_info, bind_info, config_info, rate_info
         )
         .unwrap();
 
@@ -201,6 +208,8 @@ mod tests {
                 dscp: None,
                 dscp_name: None,
                 ecn_mode: None,
+                bind_iface: None,
+                source_ip: None,
                 config: None,
                 results: StreamResults {
                     packets_sent: Some(1000),

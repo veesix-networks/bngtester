@@ -6,5 +6,6 @@ pub mod dscp;
 pub mod metrics;
 pub mod protocol;
 pub mod report;
+pub mod socket;
 pub mod stream;
 pub mod traffic;

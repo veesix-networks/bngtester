@@ -50,6 +50,10 @@ pub struct StreamReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ecn_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub bind_iface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<StreamConfigReport>,
     pub results: StreamResults,
 }

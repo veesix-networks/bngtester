@@ -26,6 +26,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [33-ecn-marking](specs/33-ecn-marking/) | [#33](https://github.com/veesix-networks/bngtester/issues/33) | Complete | ECN marking and CE detection on test traffic |
 | [34-per-stream-config](specs/34-per-stream-config/) | [#34](https://github.com/veesix-networks/bngtester/issues/34) | Complete | Per-stream size, rate, pattern overrides |
 | [35-multi-subscriber](specs/35-multi-subscriber/) | [#35](https://github.com/veesix-networks/bngtester/issues/35) | Complete | Multi-subscriber concurrent sessions with combined reports |
+| [44-bind-interface](specs/44-bind-interface/) | [#44](https://github.com/veesix-networks/bngtester/issues/44) | Complete | Bind interface / source IP for bare metal testing |
 
 ## Spec Dependencies
 
@@ -139,6 +140,14 @@ Decisions that affect future specs. Read these before proposing new work.
 - **Data streams only, not control channel.** DSCP marking targets test traffic only. Control channel TCP is not marked.
 - **IPv4-only with explicit assertion.** IPv6 endpoints with `--dscp` produce a clear error. `IPV6_TCLASS` support is a future enhancement.
 - **Per-stream DSCP overrides.** `--stream-dscp 0=AF41 --stream-dscp 1=BE` allows different traffic classes per stream. Config sent to server via hello message for reverse-path streams and report labeling.
+
+### From 44-bind-interface
+
+- **`src/socket.rs` for generic socket helpers.** `bind_to_device()` via socket2, `bind_source_ip()`, `setup_socket()` with correct ordering: SO_BINDTODEVICE → bind(source_ip) → set_tos.
+- **Socket2 used whenever any pre-connect option is set.** Not just for TOS — also for source_ip and bind_iface. Default tokio-direct path preserved when no options.
+- **Server `--data-bind-iface` constrains receiver socket.** Validates traffic path in hairpin/multi-homed scenarios.
+- **Loopback requires rp_filter=0.** Linux drops martian packets by default. Users must disable rp_filter or use network namespaces for single-host hairpin testing.
+- **Source IP validated by kernel bind().** No user-space precheck — EADDRNOTAVAIL gives authoritative error.
 
 ### From 35-multi-subscriber
 
