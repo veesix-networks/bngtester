@@ -18,3 +18,4 @@ tests/*.xml
 log.html
 report.html
 output.xml
+lab/clab-*/

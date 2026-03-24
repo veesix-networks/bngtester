@@ -48,7 +48,7 @@ pub struct UdpGeneratorConfig {
     pub duration: Duration,
     pub packet_size: usize,
     pub pattern: TrafficPattern,
-    pub dscp: Option<u8>,
+    pub tos: Option<u8>,
 }
 
 /// Result from a completed UDP generator run.
@@ -63,14 +63,15 @@ pub async fn run_udp_generator(
     config: UdpGeneratorConfig,
     cancel: CancellationToken,
 ) -> std::io::Result<UdpGeneratorResult> {
-    let socket = if let Some(dscp) = config.dscp {
+    let socket = if let Some(tos) = config.tos {
         // Create via socket2 to set TOS before any packets are sent
         let sock = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::DGRAM,
             Some(socket2::Protocol::UDP),
         )?;
-        crate::dscp::apply_dscp_to_socket(&sock, dscp, &config.target)
+        use std::os::unix::io::AsRawFd;
+        crate::dscp::apply_tos_to_fd(sock.as_raw_fd(), tos)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
         sock.bind(&socket2::SockAddr::from("0.0.0.0:0".parse::<SocketAddr>().unwrap()))?;
         sock.connect(&socket2::SockAddr::from(config.target))?;

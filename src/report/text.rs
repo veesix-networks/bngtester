@@ -65,10 +65,15 @@ pub fn to_text_string(report: &TestReport) -> String {
             None => String::new(),
         };
 
+        let ecn_info = match &stream.ecn_mode {
+            Some(mode) => format!(" ECN={mode}"),
+            None => String::new(),
+        };
+
         writeln!(
             out,
-            "  Stream {} [{} {}{}]{}",
-            stream.id, stream.stream_type, dir, dscp_info, rate_info
+            "  Stream {} [{} {}{}{}]{}",
+            stream.id, stream.stream_type, dir, dscp_info, ecn_info, rate_info
         )
         .unwrap();
 
@@ -91,6 +96,20 @@ pub fn to_text_string(report: &TestReport) -> String {
         }
         if let Some(reorder) = r.reorder_percent {
             writeln!(out, "    Reorder:  {:.1}%", reorder).unwrap();
+        }
+
+        // ECN breakdown
+        if let Some(ce) = r.ecn_ce_received {
+            let ratio = r.ecn_ce_ratio.unwrap_or(0.0);
+            let ect0 = r.ecn_ect0_received.unwrap_or(0);
+            let ect1 = r.ecn_ect1_received.unwrap_or(0);
+            let not_ect = r.ecn_not_ect_received.unwrap_or(0);
+            writeln!(
+                out,
+                "    ECN:      CE={} ({:.1}%) ECT0={} ECT1={} Not-ECT={}",
+                ce, ratio, ect0, ect1, not_ect
+            )
+            .unwrap();
         }
 
         // TCP metrics
@@ -134,6 +153,7 @@ mod tests {
                 status: StreamStatus::Complete,
                 dscp: None,
                 dscp_name: None,
+                ecn_mode: None,
                 results: StreamResults {
                     packets_sent: Some(1000),
                     packets_received: Some(998),
@@ -155,6 +175,12 @@ mod tests {
                     throughput_pps: Some(100),
                     goodput_bps: None,
                     tcp_info: None,
+                    ecn_ect_sent: None,
+                    ecn_not_ect_received: None,
+                    ecn_ect0_received: None,
+                    ecn_ect1_received: None,
+                    ecn_ce_received: None,
+                    ecn_ce_ratio: None,
                 },
             }],
             bufferbloat: None,

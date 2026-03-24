@@ -38,6 +38,8 @@ pub struct HelloMsg {
     pub dscp: Option<u8>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stream_dscp: Vec<StreamDscpConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecn: Option<String>,
 }
 
 /// DSCP override for a specific stream.
@@ -91,6 +93,14 @@ pub struct StreamResult {
     pub throughput_bps: u64,
     pub throughput_pps: u64,
     pub tcp_info: Option<TcpStats>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecn_not_ect: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecn_ect0: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecn_ect1: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecn_ce: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +235,7 @@ mod tests {
             cross_host: false,
             dscp: None,
             stream_dscp: vec![],
+            ecn: None,
         });
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();

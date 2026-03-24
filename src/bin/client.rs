@@ -90,6 +90,10 @@ struct Cli {
     /// Per-stream DSCP override (repeatable). Format: ID=DSCP (e.g., 0=AF41)
     #[arg(long = "stream-dscp", value_name = "ID=DSCP")]
     stream_dscp: Vec<String>,
+
+    /// ECN mode for outgoing packets (ect0 or ect1)
+    #[arg(long)]
+    ecn: Option<String>,
 }
 
 fn parse_mode(s: &str) -> TestMode {
@@ -163,13 +167,24 @@ async fn main() {
         }
     }
 
+    // Parse ECN
+    let ecn_mode = cli.ecn.as_ref().map(|s| {
+        bngtester::dscp::parse_ecn_mode(s).unwrap_or_else(|e| {
+            eprintln!("bngtester-client: {e}");
+            std::process::exit(1);
+        })
+    }).unwrap_or(bngtester::dscp::EcnMode::Off);
+
     if let Some(d) = global_dscp {
         eprintln!("bngtester-client: DSCP={} ({})", bngtester::dscp::dscp_name(d), d);
+    }
+    if let Some(name) = ecn_mode.name() {
+        eprintln!("bngtester-client: ECN={name}");
     }
 
     eprintln!("bngtester-client: connecting to {}", cli.server);
 
-    match run_test(&cli, mode, pattern, protocol, &thresholds, global_dscp, &stream_dscp_overrides).await {
+    match run_test(&cli, mode, pattern, protocol, &thresholds, global_dscp, &stream_dscp_overrides, ecn_mode).await {
         Ok(()) => {}
         Err(e) => {
             eprintln!("bngtester-client: error: {e}");
@@ -186,6 +201,7 @@ async fn run_test(
     thresholds: &Thresholds,
     global_dscp: Option<u8>,
     stream_dscp_overrides: &[(u8, u8)],
+    ecn_mode: bngtester::dscp::EcnMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cancel = CancellationToken::new();
 
@@ -217,6 +233,7 @@ async fn run_test(
         stream_dscp: stream_dscp_overrides.iter().map(|(id, dscp)| {
             bngtester::protocol::StreamDscpConfig { stream_id: *id, dscp: *dscp }
         }).collect(),
+        ecn: ecn_mode.name().map(|s| s.to_string()),
     });
     protocol::write_message(&mut writer, &hello).await?;
 
@@ -282,6 +299,8 @@ async fn run_test(
     );
 
     let gen_cancel = cancel.clone();
+    let stream_dscp = bngtester::dscp::resolve_stream_dscp(0, global_dscp, stream_dscp_overrides);
+    let tos = bngtester::dscp::build_tos(stream_dscp, ecn_mode);
     let gen_result = run_udp_generator(
         UdpGeneratorConfig {
             target: server_udp_addr,
@@ -290,7 +309,7 @@ async fn run_test(
             duration: Duration::from_secs(cli.duration as u64),
             packet_size: cli.size,
             pattern,
-            dscp: bngtester::dscp::resolve_stream_dscp(0, global_dscp, &stream_dscp_overrides),
+            tos: if tos != 0 { Some(tos) } else { None },
         },
         gen_cancel,
     )
@@ -330,16 +349,17 @@ async fn run_test(
             0.0
         };
 
-        let stream_dscp = bngtester::dscp::resolve_stream_dscp(
-            sr.stream_id, global_dscp, &stream_dscp_overrides,
+        let sr_dscp = bngtester::dscp::resolve_stream_dscp(
+            sr.stream_id, global_dscp, stream_dscp_overrides,
         );
         report_streams.push(StreamReport {
             id: sr.stream_id,
             stream_type: "udp_latency".to_string(),
             direction: "upstream".to_string(),
             status: sr.status,
-            dscp: stream_dscp,
-            dscp_name: stream_dscp.map(bngtester::dscp::dscp_name),
+            dscp: sr_dscp,
+            dscp_name: sr_dscp.map(bngtester::dscp::dscp_name),
+            ecn_mode: ecn_mode.name().map(|s| s.to_string()),
             results: StreamResults {
                 packets_sent: Some(gen_result.packets_sent),
                 packets_received: Some(sr.packets_received),
@@ -353,6 +373,20 @@ async fn run_test(
                 throughput_pps: Some(sr.throughput_pps),
                 goodput_bps: None,
                 tcp_info: sr.tcp_info.clone(),
+                ecn_ect_sent: if ecn_mode != bngtester::dscp::EcnMode::Off { Some(gen_result.packets_sent) } else { None },
+                ecn_not_ect_received: sr.ecn_not_ect,
+                ecn_ect0_received: sr.ecn_ect0,
+                ecn_ect1_received: sr.ecn_ect1,
+                ecn_ce_received: sr.ecn_ce,
+                ecn_ce_ratio: {
+                    let total = sr.ecn_not_ect.unwrap_or(0) + sr.ecn_ect0.unwrap_or(0)
+                        + sr.ecn_ect1.unwrap_or(0) + sr.ecn_ce.unwrap_or(0);
+                    if total > 0 {
+                        Some(sr.ecn_ce.unwrap_or(0) as f64 / total as f64 * 100.0)
+                    } else {
+                        None
+                    }
+                },
             },
         });
     }

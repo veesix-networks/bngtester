@@ -23,6 +23,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [5-rust-collector](specs/5-rust-collector/) | [#5](https://github.com/veesix-networks/bngtester/issues/5) | Complete | Rust collector — bngtester-server and bngtester-client binaries |
 | [13-robot-framework](specs/13-robot-framework/) | [#13](https://github.com/veesix-networks/bngtester/issues/13) | Complete | Robot Framework test runner with standalone + BNG integration tests |
 | [32-dscp-marking](specs/32-dscp-marking/) | [#32](https://github.com/veesix-networks/bngtester/issues/32) | Complete | DSCP/TOS marking on outgoing data stream packets |
+| [33-ecn-marking](specs/33-ecn-marking/) | [#33](https://github.com/veesix-networks/bngtester/issues/33) | Complete | ECN marking and CE detection on test traffic |
 
 ## Spec Dependencies
 
@@ -136,6 +137,13 @@ Decisions that affect future specs. Read these before proposing new work.
 - **Data streams only, not control channel.** DSCP marking targets test traffic only. Control channel TCP is not marked.
 - **IPv4-only with explicit assertion.** IPv6 endpoints with `--dscp` produce a clear error. `IPV6_TCLASS` support is a future enhancement.
 - **Per-stream DSCP overrides.** `--stream-dscp 0=AF41 --stream-dscp 1=BE` allows different traffic classes per stream. Config sent to server via hello message for reverse-path streams and report labeling.
+
+### From 33-ecn-marking
+
+- **ECN via `build_tos()` combining DSCP and ECN.** Replaces old `dscp_to_tos()`. Single TOS byte set once with both DSCP and ECN bits.
+- **Receiver detects all 4 ECN states.** Not-ECT, ECT(0), ECT(1), CE tracked separately. Detects both AQM congestion signaling (CE) and ECN stripping (ECT→Not-ECT = BNG misconfiguration).
+- **`recvmsg` via tokio `readable()` + `try_io()`.** Never blocking `libc::recvmsg` inside async task. IP_TOS cmsg parsed as `c_int`. Missing cmsg counted as unknown — CE ratio excludes unknowns.
+- **ECN report fields omitted when ECN off.** Zero means "observed zero", not "not observed". Backward compatible with existing JSON consumers.
 
 ### From 27-containerlab-topology
 
