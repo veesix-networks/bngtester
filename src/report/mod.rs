@@ -49,7 +49,17 @@ pub struct StreamReport {
     pub dscp_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ecn_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<StreamConfigReport>,
     pub results: StreamResults,
+}
+
+/// Per-stream configuration metadata for reports.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamConfigReport {
+    pub size: u32,
+    pub rate_pps: u32,
+    pub pattern: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

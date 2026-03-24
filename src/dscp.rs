@@ -296,19 +296,6 @@ pub fn recvmsg_with_tos(
     Ok((n as usize, tos))
 }
 
-/// Resolve the effective DSCP for a given stream.
-pub fn resolve_stream_dscp(
-    stream_id: u8,
-    global_dscp: Option<u8>,
-    stream_overrides: &[(u8, u8)],
-) -> Option<u8> {
-    stream_overrides
-        .iter()
-        .find(|(id, _)| *id == stream_id)
-        .map(|(_, dscp)| *dscp)
-        .or(global_dscp)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,23 +361,6 @@ mod tests {
         assert!(parse_stream_dscp("no_equals").is_err());
         assert!(parse_stream_dscp("abc=EF").is_err());
         assert!(parse_stream_dscp("0=INVALID").is_err());
-    }
-
-    #[test]
-    fn resolve_dscp_override_wins() {
-        let overrides = vec![(0, 34), (1, 46)];
-        assert_eq!(resolve_stream_dscp(0, Some(0), &overrides), Some(34));
-        assert_eq!(resolve_stream_dscp(1, Some(0), &overrides), Some(46));
-    }
-
-    #[test]
-    fn resolve_dscp_global_fallback() {
-        assert_eq!(resolve_stream_dscp(1, Some(46), &[(0, 34)]), Some(46));
-    }
-
-    #[test]
-    fn resolve_dscp_none() {
-        assert_eq!(resolve_stream_dscp(0, None, &[]), None);
     }
 
     #[test]

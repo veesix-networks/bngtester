@@ -24,6 +24,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [13-robot-framework](specs/13-robot-framework/) | [#13](https://github.com/veesix-networks/bngtester/issues/13) | Complete | Robot Framework test runner with standalone + BNG integration tests |
 | [32-dscp-marking](specs/32-dscp-marking/) | [#32](https://github.com/veesix-networks/bngtester/issues/32) | Complete | DSCP/TOS marking on outgoing data stream packets |
 | [33-ecn-marking](specs/33-ecn-marking/) | [#33](https://github.com/veesix-networks/bngtester/issues/33) | Complete | ECN marking and CE detection on test traffic |
+| [34-per-stream-config](specs/34-per-stream-config/) | [#34](https://github.com/veesix-networks/bngtester/issues/34) | Complete | Per-stream size, rate, pattern overrides |
 
 ## Spec Dependencies
 
@@ -137,6 +138,13 @@ Decisions that affect future specs. Read these before proposing new work.
 - **Data streams only, not control channel.** DSCP marking targets test traffic only. Control channel TCP is not marked.
 - **IPv4-only with explicit assertion.** IPv6 endpoints with `--dscp` produce a clear error. `IPV6_TCLASS` support is a future enhancement.
 - **Per-stream DSCP overrides.** `--stream-dscp 0=AF41 --stream-dscp 1=BE` allows different traffic classes per stream. Config sent to server via hello message for reverse-path streams and report labeling.
+
+### From 34-per-stream-config
+
+- **Unified `StreamConfigOverride` consolidates all per-stream overrides.** Size, rate, pattern, and DSCP in a single struct. Replaces the separate `StreamDscpConfig` from #32.
+- **Per-stream parsing helpers in `src/stream/config.rs`.** Not in `dscp.rs` — keeps DSCP/ECN module focused. `StreamOverrides` collection with last-match-wins resolution.
+- **Size validated >= HEADER_SIZE (32 bytes).** Rejected at parse time, not silently clamped by `build_packet()`. Rate 0 = unlimited, rendered as "unlimited" in text reports.
+- **Scoped to current UDP path.** TCP generator per-stream config is future work when RRUL multi-stream is implemented.
 
 ### From 33-ecn-marking
 

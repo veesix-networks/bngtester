@@ -12,13 +12,16 @@ use tokio_util::sync::CancellationToken;
 
 use bngtester::protocol::clock::{mono_now_ns, ClockMode, ClockSample};
 use bngtester::protocol::{
-    self, ClockSyncMsg, HelloMsg, Message, Protocol, SessionStatus, StartMsg, TestMode,
-    TrafficPattern,
+    self, ClockSyncMsg, HelloMsg, Message, Protocol, SessionStatus, StartMsg,
+    StreamConfigOverride, TestMode, TrafficPattern,
 };
 use bngtester::report::json::write_json;
 use bngtester::report::junit::write_junit;
 use bngtester::report::text::write_text;
-use bngtester::report::{StreamReport, StreamResults, TestConfig, TestReport, Thresholds};
+use bngtester::report::{
+    StreamConfigReport, StreamReport, StreamResults, TestConfig, TestReport, Thresholds,
+};
+use bngtester::stream::config::StreamOverrides;
 use bngtester::traffic::generator::{run_udp_generator, UdpGeneratorConfig};
 
 #[derive(Parser)]
@@ -91,6 +94,18 @@ struct Cli {
     #[arg(long = "stream-dscp", value_name = "ID=DSCP")]
     stream_dscp: Vec<String>,
 
+    /// Per-stream packet size override (repeatable). Format: ID=BYTES (e.g., 0=64)
+    #[arg(long = "stream-size", value_name = "ID=BYTES")]
+    stream_size: Vec<String>,
+
+    /// Per-stream rate override (repeatable). Format: ID=PPS (e.g., 0=10000, 0=0 for unlimited)
+    #[arg(long = "stream-rate", value_name = "ID=PPS")]
+    stream_rate: Vec<String>,
+
+    /// Per-stream traffic pattern override (repeatable). Format: ID=PATTERN (e.g., 0=imix)
+    #[arg(long = "stream-pattern", value_name = "ID=PATTERN")]
+    stream_pattern: Vec<String>,
+
     /// ECN mode for outgoing packets (ect0 or ect1)
     #[arg(long)]
     ecn: Option<String>,
@@ -156,10 +171,38 @@ async fn main() {
         })
     });
 
-    let mut stream_dscp_overrides = Vec::new();
+    // Build per-stream overrides
+    let mut stream_overrides = StreamOverrides::default();
     for s in &cli.stream_dscp {
         match bngtester::dscp::parse_stream_dscp(s) {
-            Ok((id, dscp)) => stream_dscp_overrides.push((id, dscp)),
+            Ok((id, dscp)) => stream_overrides.dscps.push((id, dscp)),
+            Err(e) => {
+                eprintln!("bngtester-client: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    for s in &cli.stream_size {
+        match bngtester::stream::config::parse_stream_size(s) {
+            Ok((id, size)) => stream_overrides.sizes.push((id, size)),
+            Err(e) => {
+                eprintln!("bngtester-client: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    for s in &cli.stream_rate {
+        match bngtester::stream::config::parse_stream_rate(s) {
+            Ok((id, rate)) => stream_overrides.rates.push((id, rate)),
+            Err(e) => {
+                eprintln!("bngtester-client: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    for s in &cli.stream_pattern {
+        match bngtester::stream::config::parse_stream_pattern(s) {
+            Ok((id, pat)) => stream_overrides.patterns.push((id, pat)),
             Err(e) => {
                 eprintln!("bngtester-client: {e}");
                 std::process::exit(1);
@@ -184,7 +227,7 @@ async fn main() {
 
     eprintln!("bngtester-client: connecting to {}", cli.server);
 
-    match run_test(&cli, mode, pattern, protocol, &thresholds, global_dscp, &stream_dscp_overrides, ecn_mode).await {
+    match run_test(&cli, mode, pattern, protocol, &thresholds, global_dscp, &stream_overrides, ecn_mode).await {
         Ok(()) => {}
         Err(e) => {
             eprintln!("bngtester-client: error: {e}");
@@ -200,7 +243,7 @@ async fn run_test(
     protocol: Protocol,
     thresholds: &Thresholds,
     global_dscp: Option<u8>,
-    stream_dscp_overrides: &[(u8, u8)],
+    stream_overrides: &StreamOverrides,
     ecn_mode: bngtester::dscp::EcnMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cancel = CancellationToken::new();
@@ -217,6 +260,59 @@ async fn run_test(
     let stream = TcpStream::connect(cli.server).await?;
     let (mut reader, mut writer) = stream.into_split();
 
+    // --- Build per-stream config overrides for hello ---
+    let mut stream_config_map: std::collections::BTreeMap<u8, StreamConfigOverride> =
+        std::collections::BTreeMap::new();
+    for &(id, size) in &stream_overrides.sizes {
+        stream_config_map
+            .entry(id)
+            .or_insert_with(|| StreamConfigOverride {
+                stream_id: id,
+                size: None,
+                rate_pps: None,
+                pattern: None,
+                dscp: None,
+            })
+            .size = Some(size);
+    }
+    for &(id, rate) in &stream_overrides.rates {
+        stream_config_map
+            .entry(id)
+            .or_insert_with(|| StreamConfigOverride {
+                stream_id: id,
+                size: None,
+                rate_pps: None,
+                pattern: None,
+                dscp: None,
+            })
+            .rate_pps = Some(rate);
+    }
+    for &(id, pat) in &stream_overrides.patterns {
+        stream_config_map
+            .entry(id)
+            .or_insert_with(|| StreamConfigOverride {
+                stream_id: id,
+                size: None,
+                rate_pps: None,
+                pattern: None,
+                dscp: None,
+            })
+            .pattern = Some(pat);
+    }
+    for &(id, dscp) in &stream_overrides.dscps {
+        stream_config_map
+            .entry(id)
+            .or_insert_with(|| StreamConfigOverride {
+                stream_id: id,
+                size: None,
+                rate_pps: None,
+                pattern: None,
+                dscp: None,
+            })
+            .dscp = Some(dscp);
+    }
+    let stream_config: Vec<StreamConfigOverride> = stream_config_map.into_values().collect();
+
     // --- Send Hello ---
     let hello = Message::Hello(HelloMsg {
         mode,
@@ -230,9 +326,7 @@ async fn run_test(
         rrul_ramp_up_ms: cli.rrul_ramp_up,
         cross_host: cli.cross_host,
         dscp: global_dscp,
-        stream_dscp: stream_dscp_overrides.iter().map(|(id, dscp)| {
-            bngtester::protocol::StreamDscpConfig { stream_id: *id, dscp: *dscp }
-        }).collect(),
+        stream_config,
         ecn: ecn_mode.name().map(|s| s.to_string()),
     });
     protocol::write_message(&mut writer, &hello).await?;
@@ -299,16 +393,22 @@ async fn run_test(
     );
 
     let gen_cancel = cancel.clone();
-    let stream_dscp = bngtester::dscp::resolve_stream_dscp(0, global_dscp, stream_dscp_overrides);
-    let tos = bngtester::dscp::build_tos(stream_dscp, ecn_mode);
+    let resolved = stream_overrides.resolve(
+        0,
+        cli.size as u32,
+        cli.rate,
+        pattern,
+        global_dscp,
+    );
+    let tos = bngtester::dscp::build_tos(resolved.dscp, ecn_mode);
     let gen_result = run_udp_generator(
         UdpGeneratorConfig {
             target: server_udp_addr,
             stream_id: 0,
-            rate_pps: cli.rate,
+            rate_pps: resolved.rate_pps,
             duration: Duration::from_secs(cli.duration as u64),
-            packet_size: cli.size,
-            pattern,
+            packet_size: resolved.size as usize,
+            pattern: resolved.pattern,
             tos: if tos != 0 { Some(tos) } else { None },
         },
         gen_cancel,
@@ -349,17 +449,31 @@ async fn run_test(
             0.0
         };
 
-        let sr_dscp = bngtester::dscp::resolve_stream_dscp(
-            sr.stream_id, global_dscp, stream_dscp_overrides,
+        let sr_resolved = stream_overrides.resolve(
+            sr.stream_id,
+            cli.size as u32,
+            cli.rate,
+            pattern,
+            global_dscp,
         );
+        let stream_config_report = if stream_overrides.has_overrides(sr.stream_id) {
+            Some(StreamConfigReport {
+                size: sr_resolved.size,
+                rate_pps: sr_resolved.rate_pps,
+                pattern: format!("{:?}", sr_resolved.pattern).to_lowercase(),
+            })
+        } else {
+            None
+        };
         report_streams.push(StreamReport {
             id: sr.stream_id,
             stream_type: "udp_latency".to_string(),
             direction: "upstream".to_string(),
             status: sr.status,
-            dscp: sr_dscp,
-            dscp_name: sr_dscp.map(bngtester::dscp::dscp_name),
+            dscp: sr_resolved.dscp,
+            dscp_name: sr_resolved.dscp.map(bngtester::dscp::dscp_name),
             ecn_mode: ecn_mode.name().map(|s| s.to_string()),
+            config: stream_config_report,
             results: StreamResults {
                 packets_sent: Some(gen_result.packets_sent),
                 packets_received: Some(sr.packets_received),
