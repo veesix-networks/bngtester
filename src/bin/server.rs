@@ -8,12 +8,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use bngtester::config::load_server_config;
 use bngtester::protocol::clock::{mono_now_ns, ClockMode};
 use bngtester::protocol::session::{HeartbeatTracker, HEARTBEAT_INTERVAL};
 use bngtester::protocol::{
@@ -32,6 +33,10 @@ use bngtester::stream::config::StreamOverrides;
 #[derive(Parser)]
 #[command(name = "bngtester-server", about = "BNG test traffic receiver and measurement server")]
 struct Cli {
+    /// YAML config file path
+    #[arg(long)]
+    config: Option<String>,
+
     /// Listen address for control channel
     #[arg(short, long, default_value = "0.0.0.0:5000")]
     listen: SocketAddr,
@@ -142,11 +147,119 @@ impl SessionRegistry {
     }
 }
 
+fn was_cli_provided(matches: &ArgMatches, field: &str) -> bool {
+    matches.value_source(field) == Some(clap::parser::ValueSource::CommandLine)
+}
+
+fn merge_value<T>(cli_val: T, config_val: Option<T>, matches: &ArgMatches, field: &str) -> T {
+    if was_cli_provided(matches, field) {
+        cli_val
+    } else {
+        config_val.unwrap_or(cli_val)
+    }
+}
+
+fn merge_option(
+    cli_val: Option<String>,
+    config_val: Option<String>,
+    matches: &ArgMatches,
+    field: &str,
+) -> Option<String> {
+    if was_cli_provided(matches, field) {
+        cli_val
+    } else {
+        config_val.or(cli_val)
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
 
+    // Load config file if specified
+    let cfg = if let Some(ref config_path) = cli.config {
+        match load_server_config(std::path::Path::new(config_path)) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("bngtester-server: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    // Merge config file values with CLI values
+    let listen_str = if was_cli_provided(&matches, "listen") {
+        cli.listen.to_string()
+    } else {
+        cfg.as_ref()
+            .and_then(|c| c.listen.clone())
+            .unwrap_or_else(|| cli.listen.to_string())
+    };
+    let listen: SocketAddr = match listen_str.parse() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("bngtester-server: invalid listen address '{listen_str}': {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let output = merge_value(
+        cli.output,
+        cfg.as_ref().and_then(|c| c.output.clone()),
+        &matches,
+        "output",
+    );
+    let file = merge_option(
+        cli.file,
+        cfg.as_ref().and_then(|c| c.file.clone()),
+        &matches,
+        "file",
+    );
+    let raw_file = merge_option(
+        cli.raw_file,
+        cfg.as_ref().and_then(|c| c.raw_file.clone()),
+        &matches,
+        "raw-file",
+    );
+
+    let combined = if was_cli_provided(&matches, "combined") {
+        cli.combined
+    } else {
+        cfg.as_ref()
+            .and_then(|c| c.combined)
+            .unwrap_or(cli.combined)
+    };
+
+    let max_clients = merge_value(
+        cli.max_clients,
+        cfg.as_ref().and_then(|c| c.max_clients.map(|v| v as usize)),
+        &matches,
+        "max-clients",
+    );
+    let timeout_secs = merge_value(
+        cli.timeout,
+        cfg.as_ref().and_then(|c| c.timeout),
+        &matches,
+        "timeout",
+    );
+
+    // Merge thresholds: config first, then CLI overrides by key
     let mut thresholds = Thresholds::default();
+    if let Some(ref cfg_thresholds) = cfg.as_ref().and_then(|c| c.thresholds.clone()) {
+        for (k, v) in cfg_thresholds {
+            let s = format!("{k}={v}");
+            if let Err(e) = thresholds.parse_threshold(&s) {
+                eprintln!("bngtester-server: config thresholds: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     for t in &cli.thresholds {
         if let Err(e) = thresholds.parse_threshold(t) {
             eprintln!("bngtester-server: {e}");
@@ -154,17 +267,24 @@ async fn main() {
         }
     }
 
+    let data_bind_iface = merge_option(
+        cli.data_bind_iface,
+        cfg.as_ref().and_then(|c| c.data_bind_iface.clone()),
+        &matches,
+        "data-bind-iface",
+    );
+
     let config = Arc::new(ServerConfig {
-        listen: cli.listen,
-        output: cli.output,
-        file: cli.file,
-        raw_file: cli.raw_file,
+        listen,
+        output,
+        file,
+        raw_file,
         thresholds,
         histogram_buckets: cli.histogram_buckets,
-        combined: cli.combined,
-        max_clients: cli.max_clients,
-        timeout_secs: cli.timeout,
-        data_bind_iface: cli.data_bind_iface,
+        combined,
+        max_clients,
+        timeout_secs,
+        data_bind_iface,
     });
 
     eprintln!("bngtester-server: listening on {}", config.listen);

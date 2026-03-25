@@ -5,11 +5,12 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser};
 use tokio::net::TcpStream;
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 
+use bngtester::config::{load_client_config, ClientConfig};
 use bngtester::protocol::clock::{mono_now_ns, ClockMode, ClockSample};
 use bngtester::protocol::{
     self, ClockSyncMsg, HelloMsg, Message, Protocol, SessionStatus, StartMsg,
@@ -28,7 +29,11 @@ use bngtester::traffic::generator::{run_udp_generator, UdpGeneratorConfig};
 #[command(name = "bngtester-client", about = "BNG test traffic generator")]
 struct Cli {
     /// Server address (host:port)
-    server: SocketAddr,
+    server: Option<String>,
+
+    /// YAML config file path
+    #[arg(long)]
+    config: Option<String>,
 
     /// Test mode: throughput, latency, rrul, bidirectional
     #[arg(short, long, default_value = "latency")]
@@ -127,6 +132,248 @@ struct Cli {
     control_bind_ip: Option<std::net::IpAddr>,
 }
 
+/// Resolved client configuration after merging CLI and config file.
+#[allow(dead_code)]
+struct ResolvedClient {
+    server: SocketAddr,
+    mode: String,
+    protocol: String,
+    size: usize,
+    rate: u32,
+    duration: u32,
+    pattern: String,
+    rrul_baseline: u32,
+    rrul_ramp_up: u32,
+    streams: u32,
+    cross_host: bool,
+    output: String,
+    file: Option<String>,
+    raw_file: Option<String>,
+    dscp: Option<String>,
+    ecn: Option<String>,
+    client_id: Option<String>,
+    bind_iface: Option<String>,
+    source_ip: Option<std::net::IpAddr>,
+    control_bind_ip: Option<std::net::IpAddr>,
+    thresholds: Thresholds,
+    stream_overrides: StreamOverrides,
+}
+
+fn was_cli_provided(matches: &ArgMatches, field: &str) -> bool {
+    matches.value_source(field) == Some(clap::parser::ValueSource::CommandLine)
+}
+
+fn merge_value<T>(cli_val: T, config_val: Option<T>, matches: &ArgMatches, field: &str) -> T {
+    if was_cli_provided(matches, field) {
+        cli_val
+    } else {
+        config_val.unwrap_or(cli_val)
+    }
+}
+
+fn merge_option(
+    cli_val: Option<String>,
+    config_val: Option<String>,
+    matches: &ArgMatches,
+    field: &str,
+) -> Option<String> {
+    if was_cli_provided(matches, field) {
+        cli_val
+    } else {
+        config_val.or(cli_val)
+    }
+}
+
+fn resolve_client(cli: Cli, matches: &ArgMatches, cfg: Option<ClientConfig>) -> ResolvedClient {
+    let cfg = cfg.unwrap_or_default();
+
+    // Resolve server: CLI positional > config > error
+    let server_str = if was_cli_provided(matches, "server") {
+        cli.server.clone()
+    } else {
+        cfg.server.clone().or(cli.server.clone())
+    };
+    let server_str = match server_str {
+        Some(s) => s,
+        None => {
+            eprintln!("bngtester-client: server address required (positional arg or config file 'server' field)");
+            std::process::exit(1);
+        }
+    };
+    let server: SocketAddr = match server_str.parse() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("bngtester-client: invalid server address '{server_str}': {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let mode = merge_value(cli.mode, cfg.mode, matches, "mode");
+    let protocol = merge_value(cli.protocol, cfg.protocol, matches, "protocol");
+    let size = merge_value(
+        cli.size,
+        cfg.size.map(|s| s as usize),
+        matches,
+        "size",
+    );
+    let rate = merge_value(cli.rate, cfg.rate, matches, "rate");
+    let duration = merge_value(cli.duration, cfg.duration, matches, "duration");
+    let pattern = merge_value(cli.pattern, cfg.pattern, matches, "pattern");
+    let rrul_baseline = merge_value(cli.rrul_baseline, cfg.rrul_baseline, matches, "rrul-baseline");
+    let rrul_ramp_up = merge_value(cli.rrul_ramp_up, cfg.rrul_ramp_up, matches, "rrul-ramp-up");
+    let streams = merge_value(cli.streams, cfg.streams, matches, "streams");
+
+    let cross_host = if was_cli_provided(matches, "cross-host") {
+        cli.cross_host
+    } else {
+        cfg.cross_host.unwrap_or(cli.cross_host)
+    };
+
+    let output = merge_value(cli.output, cfg.output, matches, "output");
+    let file = merge_option(cli.file, cfg.file, matches, "file");
+    let raw_file = merge_option(cli.raw_file, cfg.raw_file, matches, "raw-file");
+    let dscp = merge_option(cli.dscp, cfg.dscp, matches, "dscp");
+    let ecn = merge_option(cli.ecn, cfg.ecn, matches, "ecn");
+    let client_id = merge_option(cli.client_id, cfg.client_id, matches, "client-id");
+    let bind_iface = merge_option(cli.bind_iface, cfg.bind_iface, matches, "bind-iface");
+    let source_ip = if was_cli_provided(matches, "source-ip") {
+        cli.source_ip
+    } else {
+        cfg.source_ip
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .or(cli.source_ip)
+    };
+    let control_bind_ip = if was_cli_provided(matches, "control-bind-ip") {
+        cli.control_bind_ip
+    } else {
+        cfg.control_bind_ip
+            .as_deref()
+            .and_then(|s| s.parse().ok())
+            .or(cli.control_bind_ip)
+    };
+
+    // Merge thresholds: config first, then CLI overrides by key
+    let mut thresholds = Thresholds::default();
+    if let Some(cfg_thresholds) = &cfg.thresholds {
+        for (k, v) in cfg_thresholds {
+            let s = format!("{k}={v}");
+            if let Err(e) = thresholds.parse_threshold(&s) {
+                eprintln!("bngtester-client: config thresholds: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    for t in &cli.thresholds {
+        if let Err(e) = thresholds.parse_threshold(t) {
+            eprintln!("bngtester-client: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    // Build stream overrides: config first, then CLI overrides per stream ID
+    let mut stream_overrides = StreamOverrides::default();
+
+    // Apply config stream_overrides first
+    if let Some(cfg_overrides) = &cfg.stream_overrides {
+        for entry in cfg_overrides {
+            if let Some(size_val) = entry.size {
+                stream_overrides.sizes.push((entry.id, size_val));
+            }
+            if let Some(rate_val) = entry.rate {
+                stream_overrides.rates.push((entry.id, rate_val));
+            }
+            if let Some(ref pat_str) = entry.pattern {
+                match bngtester::stream::config::parse_stream_pattern(&format!(
+                    "{}={pat_str}",
+                    entry.id
+                )) {
+                    Ok((id, pat)) => stream_overrides.patterns.push((id, pat)),
+                    Err(e) => {
+                        eprintln!("bngtester-client: config stream_overrides: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            if let Some(ref dscp_str) = entry.dscp {
+                match bngtester::dscp::parse_stream_dscp(&format!(
+                    "{}={dscp_str}",
+                    entry.id
+                )) {
+                    Ok((id, dscp_val)) => stream_overrides.dscps.push((id, dscp_val)),
+                    Err(e) => {
+                        eprintln!("bngtester-client: config stream_overrides: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply CLI stream overrides (these come after config, so last-match-wins gives CLI priority)
+    for s in &cli.stream_dscp {
+        match bngtester::dscp::parse_stream_dscp(s) {
+            Ok((id, dscp_val)) => stream_overrides.dscps.push((id, dscp_val)),
+            Err(e) => {
+                eprintln!("bngtester-client: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    for s in &cli.stream_size {
+        match bngtester::stream::config::parse_stream_size(s) {
+            Ok((id, size_val)) => stream_overrides.sizes.push((id, size_val)),
+            Err(e) => {
+                eprintln!("bngtester-client: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    for s in &cli.stream_rate {
+        match bngtester::stream::config::parse_stream_rate(s) {
+            Ok((id, rate_val)) => stream_overrides.rates.push((id, rate_val)),
+            Err(e) => {
+                eprintln!("bngtester-client: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    for s in &cli.stream_pattern {
+        match bngtester::stream::config::parse_stream_pattern(s) {
+            Ok((id, pat)) => stream_overrides.patterns.push((id, pat)),
+            Err(e) => {
+                eprintln!("bngtester-client: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    ResolvedClient {
+        server,
+        mode,
+        protocol,
+        size,
+        rate,
+        duration,
+        pattern,
+        rrul_baseline,
+        rrul_ramp_up,
+        streams,
+        cross_host,
+        output,
+        file,
+        raw_file,
+        dscp,
+        ecn,
+        client_id,
+        bind_iface,
+        source_ip,
+        control_bind_ip,
+        thresholds,
+        stream_overrides,
+    }
+}
+
 fn parse_mode(s: &str) -> TestMode {
     match s {
         "throughput" => TestMode::Throughput,
@@ -165,69 +412,41 @@ fn parse_protocol(s: &str) -> Protocol {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
 
-    let mut thresholds = Thresholds::default();
-    for t in &cli.thresholds {
-        if let Err(e) = thresholds.parse_threshold(t) {
-            eprintln!("bngtester-client: {e}");
-            std::process::exit(1);
+    // Load config file if specified
+    let cfg = if let Some(ref config_path) = cli.config {
+        match load_client_config(std::path::Path::new(config_path)) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("bngtester-client: {e}");
+                std::process::exit(1);
+            }
         }
-    }
+    } else {
+        None
+    };
 
-    let mode = parse_mode(&cli.mode);
-    let pattern = parse_pattern(&cli.pattern);
-    let protocol = parse_protocol(&cli.protocol);
+    let resolved = resolve_client(cli, &matches, cfg);
+
+    let mode = parse_mode(&resolved.mode);
+    let pattern = parse_pattern(&resolved.pattern);
+    let protocol = parse_protocol(&resolved.protocol);
 
     // Parse DSCP
-    let global_dscp = cli.dscp.as_ref().map(|s| {
+    let global_dscp = resolved.dscp.as_ref().map(|s| {
         bngtester::dscp::parse_dscp(s).unwrap_or_else(|e| {
             eprintln!("bngtester-client: {e}");
             std::process::exit(1);
         })
     });
 
-    // Build per-stream overrides
-    let mut stream_overrides = StreamOverrides::default();
-    for s in &cli.stream_dscp {
-        match bngtester::dscp::parse_stream_dscp(s) {
-            Ok((id, dscp)) => stream_overrides.dscps.push((id, dscp)),
-            Err(e) => {
-                eprintln!("bngtester-client: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
-    for s in &cli.stream_size {
-        match bngtester::stream::config::parse_stream_size(s) {
-            Ok((id, size)) => stream_overrides.sizes.push((id, size)),
-            Err(e) => {
-                eprintln!("bngtester-client: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
-    for s in &cli.stream_rate {
-        match bngtester::stream::config::parse_stream_rate(s) {
-            Ok((id, rate)) => stream_overrides.rates.push((id, rate)),
-            Err(e) => {
-                eprintln!("bngtester-client: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
-    for s in &cli.stream_pattern {
-        match bngtester::stream::config::parse_stream_pattern(s) {
-            Ok((id, pat)) => stream_overrides.patterns.push((id, pat)),
-            Err(e) => {
-                eprintln!("bngtester-client: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
-
     // Parse ECN
-    let ecn_mode = cli.ecn.as_ref().map(|s| {
+    let ecn_mode = resolved.ecn.as_ref().map(|s| {
         bngtester::dscp::parse_ecn_mode(s).unwrap_or_else(|e| {
             eprintln!("bngtester-client: {e}");
             std::process::exit(1);
@@ -241,9 +460,9 @@ async fn main() {
         eprintln!("bngtester-client: ECN={name}");
     }
 
-    eprintln!("bngtester-client: connecting to {}", cli.server);
+    eprintln!("bngtester-client: connecting to {}", resolved.server);
 
-    match run_test(&cli, mode, pattern, protocol, &thresholds, global_dscp, &stream_overrides, ecn_mode).await {
+    match run_test(&resolved, mode, pattern, protocol, global_dscp, ecn_mode).await {
         Ok(()) => {}
         Err(e) => {
             eprintln!("bngtester-client: error: {e}");
@@ -253,13 +472,11 @@ async fn main() {
 }
 
 async fn run_test(
-    cli: &Cli,
+    resolved: &ResolvedClient,
     mode: TestMode,
     pattern: TrafficPattern,
     protocol: Protocol,
-    thresholds: &Thresholds,
     global_dscp: Option<u8>,
-    stream_overrides: &StreamOverrides,
     ecn_mode: bngtester::dscp::EcnMode,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cancel = CancellationToken::new();
@@ -273,7 +490,7 @@ async fn run_test(
     });
 
     // --- Connect control channel ---
-    let stream = if let Some(bind_ip) = cli.control_bind_ip {
+    let stream = if let Some(bind_ip) = resolved.control_bind_ip {
         let sock = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::STREAM,
@@ -282,7 +499,7 @@ async fn run_test(
         bngtester::socket::bind_source_ip(&sock, bind_ip)
             .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
         sock.set_nonblocking(true)?;
-        let addr = socket2::SockAddr::from(cli.server);
+        let addr = socket2::SockAddr::from(resolved.server);
         match sock.connect(&addr) {
             Ok(()) => {}
             Err(e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {}
@@ -295,14 +512,14 @@ async fn run_test(
             .map_err(|_| -> Box<dyn std::error::Error> { "control channel connect timeout".into() })??;
         tokio_stream
     } else {
-        TcpStream::connect(cli.server).await?
+        TcpStream::connect(resolved.server).await?
     };
     let (mut reader, mut writer) = stream.into_split();
 
     // --- Build per-stream config overrides for hello ---
     let mut stream_config_map: std::collections::BTreeMap<u8, StreamConfigOverride> =
         std::collections::BTreeMap::new();
-    for &(id, size) in &stream_overrides.sizes {
+    for &(id, size) in &resolved.stream_overrides.sizes {
         stream_config_map
             .entry(id)
             .or_insert_with(|| StreamConfigOverride {
@@ -314,7 +531,7 @@ async fn run_test(
             })
             .size = Some(size);
     }
-    for &(id, rate) in &stream_overrides.rates {
+    for &(id, rate) in &resolved.stream_overrides.rates {
         stream_config_map
             .entry(id)
             .or_insert_with(|| StreamConfigOverride {
@@ -326,7 +543,7 @@ async fn run_test(
             })
             .rate_pps = Some(rate);
     }
-    for &(id, pat) in &stream_overrides.patterns {
+    for &(id, pat) in &resolved.stream_overrides.patterns {
         stream_config_map
             .entry(id)
             .or_insert_with(|| StreamConfigOverride {
@@ -338,7 +555,7 @@ async fn run_test(
             })
             .pattern = Some(pat);
     }
-    for &(id, dscp) in &stream_overrides.dscps {
+    for &(id, dscp) in &resolved.stream_overrides.dscps {
         stream_config_map
             .entry(id)
             .or_insert_with(|| StreamConfigOverride {
@@ -356,20 +573,20 @@ async fn run_test(
     let hello = Message::Hello(HelloMsg {
         mode,
         protocol,
-        duration_secs: cli.duration,
-        packet_size: cli.size as u32,
-        rate_pps: cli.rate,
+        duration_secs: resolved.duration,
+        packet_size: resolved.size as u32,
+        rate_pps: resolved.rate,
         pattern,
-        streams_per_direction: cli.streams,
-        rrul_baseline_secs: cli.rrul_baseline,
-        rrul_ramp_up_ms: cli.rrul_ramp_up,
-        cross_host: cli.cross_host,
+        streams_per_direction: resolved.streams,
+        rrul_baseline_secs: resolved.rrul_baseline,
+        rrul_ramp_up_ms: resolved.rrul_ramp_up,
+        cross_host: resolved.cross_host,
         dscp: global_dscp,
         stream_config,
         ecn: ecn_mode.name().map(|s| s.to_string()),
-        client_id: cli.client_id.clone(),
-        bind_iface: cli.bind_iface.clone(),
-        source_ip: cli.source_ip.map(|ip| ip.to_string()),
+        client_id: resolved.client_id.clone(),
+        bind_iface: resolved.bind_iface.clone(),
+        source_ip: resolved.source_ip.map(|ip| ip.to_string()),
     });
     protocol::write_message(&mut writer, &hello).await?;
 
@@ -385,7 +602,7 @@ async fn run_test(
     );
 
     // --- Clock sync ---
-    let clock_mode = if cli.cross_host {
+    let clock_mode = if resolved.cross_host {
         let mut samples = Vec::new();
         for _ in 0..bngtester::protocol::clock::sync_rounds() {
             let client_send = mono_now_ns();
@@ -427,33 +644,33 @@ async fn run_test(
     protocol::write_message(&mut writer, &start).await?;
 
     // --- Run test ---
-    let server_udp_addr: SocketAddr = SocketAddr::new(cli.server.ip(), ready.udp_port);
+    let server_udp_addr: SocketAddr = SocketAddr::new(resolved.server.ip(), ready.udp_port);
 
     eprintln!(
         "bngtester-client: sending {:?} traffic to {} for {}s",
-        mode, server_udp_addr, cli.duration
+        mode, server_udp_addr, resolved.duration
     );
 
     let gen_cancel = cancel.clone();
-    let resolved = stream_overrides.resolve(
+    let stream_resolved = resolved.stream_overrides.resolve(
         0,
-        cli.size as u32,
-        cli.rate,
+        resolved.size as u32,
+        resolved.rate,
         pattern,
         global_dscp,
     );
-    let tos = bngtester::dscp::build_tos(resolved.dscp, ecn_mode);
+    let tos = bngtester::dscp::build_tos(stream_resolved.dscp, ecn_mode);
     let gen_result = run_udp_generator(
         UdpGeneratorConfig {
             target: server_udp_addr,
             stream_id: 0,
-            rate_pps: resolved.rate_pps,
-            duration: Duration::from_secs(cli.duration as u64),
-            packet_size: resolved.size as usize,
-            pattern: resolved.pattern,
+            rate_pps: stream_resolved.rate_pps,
+            duration: Duration::from_secs(resolved.duration as u64),
+            packet_size: stream_resolved.size as usize,
+            pattern: stream_resolved.pattern,
             tos: if tos != 0 { Some(tos) } else { None },
-            bind_iface: cli.bind_iface.clone(),
-            source_ip: cli.source_ip,
+            bind_iface: resolved.bind_iface.clone(),
+            source_ip: resolved.source_ip,
         },
         gen_cancel,
     )
@@ -493,14 +710,14 @@ async fn run_test(
             0.0
         };
 
-        let sr_resolved = stream_overrides.resolve(
+        let sr_resolved = resolved.stream_overrides.resolve(
             sr.stream_id,
-            cli.size as u32,
-            cli.rate,
+            resolved.size as u32,
+            resolved.rate,
             pattern,
             global_dscp,
         );
-        let stream_config_report = if stream_overrides.has_overrides(sr.stream_id) {
+        let stream_config_report = if resolved.stream_overrides.has_overrides(sr.stream_id) {
             Some(StreamConfigReport {
                 size: sr_resolved.size,
                 rate_pps: sr_resolved.rate_pps,
@@ -517,8 +734,8 @@ async fn run_test(
             dscp: sr_resolved.dscp,
             dscp_name: sr_resolved.dscp.map(bngtester::dscp::dscp_name),
             ecn_mode: ecn_mode.name().map(|s| s.to_string()),
-            bind_iface: cli.bind_iface.clone(),
-            source_ip: cli.source_ip.map(|ip| ip.to_string()),
+            bind_iface: resolved.bind_iface.clone(),
+            source_ip: resolved.source_ip.map(|ip| ip.to_string()),
             config: stream_config_report,
             results: StreamResults {
                 packets_sent: Some(gen_result.packets_sent),
@@ -556,9 +773,9 @@ async fn run_test(
         clock_mode: clock_mode.name().to_string(),
         test: TestConfig {
             mode,
-            duration_secs: cli.duration,
+            duration_secs: resolved.duration,
             client: "local".to_string(),
-            server: cli.server.to_string(),
+            server: resolved.server.to_string(),
         },
         streams: report_streams,
         bufferbloat: None,
@@ -567,16 +784,16 @@ async fn run_test(
     };
 
     // --- Output report ---
-    let output: Box<dyn std::io::Write> = if let Some(ref path) = cli.file {
+    let output: Box<dyn std::io::Write> = if let Some(ref path) = resolved.file {
         Box::new(std::fs::File::create(path)?)
     } else {
         Box::new(std::io::stdout())
     };
     let mut output = output;
 
-    match cli.output.as_str() {
+    match resolved.output.as_str() {
         "json" => write_json(&mut output, &report)?,
-        "junit" => write_junit(&mut output, &report, thresholds)?,
+        "junit" => write_junit(&mut output, &report, &resolved.thresholds)?,
         "text" => write_text(&mut output, &report)?,
         other => {
             eprintln!("bngtester-client: unknown output format: {other}");

@@ -27,6 +27,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [34-per-stream-config](specs/34-per-stream-config/) | [#34](https://github.com/veesix-networks/bngtester/issues/34) | Complete | Per-stream size, rate, pattern overrides |
 | [35-multi-subscriber](specs/35-multi-subscriber/) | [#35](https://github.com/veesix-networks/bngtester/issues/35) | Complete | Multi-subscriber concurrent sessions with combined reports |
 | [44-bind-interface](specs/44-bind-interface/) | [#44](https://github.com/veesix-networks/bngtester/issues/44) | Complete | Bind interface / source IP for bare metal testing |
+| [43-config-file](specs/43-config-file/) | [#43](https://github.com/veesix-networks/bngtester/issues/43) | Complete | YAML config file support with CLI override |
 
 ## Spec Dependencies
 
@@ -148,6 +149,13 @@ Decisions that affect future specs. Read these before proposing new work.
 - **Server `--data-bind-iface` constrains receiver socket.** Validates traffic path in hairpin/multi-homed scenarios.
 - **Loopback requires rp_filter=0.** Linux drops martian packets by default. Users must disable rp_filter or use network namespaces for single-host hairpin testing.
 - **Source IP validated by kernel bind().** No user-space precheck — EADDRNOTAVAIL gives authoritative error.
+
+### From 43-config-file
+
+- **YAML config via `serde_yml` (maintained fork).** Not deprecated `serde_yaml`. `#[serde(deny_unknown_fields)]` rejects typos at startup.
+- **Three-tier merge: CLI > config file > built-in default.** Uses clap's `value_source()` to distinguish user-provided CLI flags from defaults. Config file values only override clap defaults, never explicit CLI flags.
+- **Server address in config file.** `server:` field makes config files self-contained — `bngtester-client --config profile.yaml` works with no positional arg.
+- **Stream overrides deep merge by ID.** CLI `--stream-*` flags override matching stream ID fields from config. Thresholds merge by key.
 
 ### From 35-multi-subscriber
 
