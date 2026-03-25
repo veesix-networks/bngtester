@@ -42,6 +42,10 @@ pub struct HelloMsg {
     pub ecn: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_iface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ip: Option<String>,
 }
 
 /// Per-stream configuration override. Only overridden fields are set.
@@ -246,6 +250,8 @@ mod tests {
             stream_config: vec![],
             ecn: None,
             client_id: None,
+            bind_iface: None,
+            source_ip: None,
         });
         let mut buf = Vec::new();
         write_message(&mut buf, &msg).await.unwrap();

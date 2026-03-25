@@ -113,6 +113,18 @@ struct Cli {
     /// Client identifier for multi-subscriber coordination
     #[arg(long)]
     client_id: Option<String>,
+
+    /// Bind data sockets to a specific interface via SO_BINDTODEVICE
+    #[arg(long)]
+    bind_iface: Option<String>,
+
+    /// Bind data sockets to a specific source IP
+    #[arg(long)]
+    source_ip: Option<std::net::IpAddr>,
+
+    /// Bind control channel TCP to a specific source IP
+    #[arg(long)]
+    control_bind_ip: Option<std::net::IpAddr>,
 }
 
 fn parse_mode(s: &str) -> TestMode {
@@ -261,7 +273,30 @@ async fn run_test(
     });
 
     // --- Connect control channel ---
-    let stream = TcpStream::connect(cli.server).await?;
+    let stream = if let Some(bind_ip) = cli.control_bind_ip {
+        let sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )?;
+        bngtester::socket::bind_source_ip(&sock, bind_ip)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        sock.set_nonblocking(true)?;
+        let addr = socket2::SockAddr::from(cli.server);
+        match sock.connect(&addr) {
+            Ok(()) => {}
+            Err(e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {}
+            Err(e) => return Err(e.into()),
+        }
+        let std_stream: std::net::TcpStream = sock.into();
+        let tokio_stream = TcpStream::from_std(std_stream)?;
+        tokio::time::timeout(Duration::from_secs(10), tokio_stream.writable())
+            .await
+            .map_err(|_| -> Box<dyn std::error::Error> { "control channel connect timeout".into() })??;
+        tokio_stream
+    } else {
+        TcpStream::connect(cli.server).await?
+    };
     let (mut reader, mut writer) = stream.into_split();
 
     // --- Build per-stream config overrides for hello ---
@@ -333,6 +368,8 @@ async fn run_test(
         stream_config,
         ecn: ecn_mode.name().map(|s| s.to_string()),
         client_id: cli.client_id.clone(),
+        bind_iface: cli.bind_iface.clone(),
+        source_ip: cli.source_ip.map(|ip| ip.to_string()),
     });
     protocol::write_message(&mut writer, &hello).await?;
 
@@ -415,6 +452,8 @@ async fn run_test(
             packet_size: resolved.size as usize,
             pattern: resolved.pattern,
             tos: if tos != 0 { Some(tos) } else { None },
+            bind_iface: cli.bind_iface.clone(),
+            source_ip: cli.source_ip,
         },
         gen_cancel,
     )
@@ -478,6 +517,8 @@ async fn run_test(
             dscp: sr_resolved.dscp,
             dscp_name: sr_resolved.dscp.map(bngtester::dscp::dscp_name),
             ecn_mode: ecn_mode.name().map(|s| s.to_string()),
+            bind_iface: cli.bind_iface.clone(),
+            source_ip: cli.source_ip.map(|ip| ip.to_string()),
             config: stream_config_report,
             results: StreamResults {
                 packets_sent: Some(gen_result.packets_sent),
