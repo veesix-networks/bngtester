@@ -1,0 +1,26 @@
+# Bare metal loopback test — client and server on same machine,
+# traffic hairpins through the BNG via different interfaces.
+#
+# Prerequisites:
+#   sysctl -w net.ipv4.conf.all.rp_filter=0
+#   sysctl -w net.ipv4.conf.eth1.rp_filter=0
+#
+# Run:
+#   bngtester-server -l 10.0.0.2:5000 --data-bind-iface eth2 &
+#   bngtester-client --config examples/bare-metal-loopback.yaml
+
+server: 10.0.0.2:5000
+mode: latency
+duration: 10
+rate: 100
+size: 512
+
+bind_iface: eth1
+source_ip: 10.255.0.2
+control_bind_ip: 10.255.0.2
+
+dscp: EF
+ecn: ect0
+client_id: loopback-sub1
+
+output: text

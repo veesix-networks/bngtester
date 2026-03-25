@@ -1,0 +1,12 @@
+# Server config for multi-subscriber testing — wait for 4 clients
+listen: 0.0.0.0:5000
+combined: true
+max_clients: 4
+timeout: 120
+output: json
+file: combined-results.json
+
+thresholds:
+  p99: 1000
+  loss: 0.1
+  bloat: 3.0

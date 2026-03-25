@@ -27,6 +27,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [34-per-stream-config](specs/34-per-stream-config/) | [#34](https://github.com/veesix-networks/bngtester/issues/34) | Complete | Per-stream size, rate, pattern overrides |
 | [35-multi-subscriber](specs/35-multi-subscriber/) | [#35](https://github.com/veesix-networks/bngtester/issues/35) | Complete | Multi-subscriber concurrent sessions with combined reports |
 | [44-bind-interface](specs/44-bind-interface/) | [#44](https://github.com/veesix-networks/bngtester/issues/44) | Complete | Bind interface / source IP for bare metal testing |
+| [43-config-file](specs/43-config-file/) | [#43](https://github.com/veesix-networks/bngtester/issues/43) | Complete | YAML config file support with CLI override |
 
 ## Spec Dependencies
 
@@ -37,8 +38,17 @@ graph TD
     D[3-debian-subscriber-image<br/>Debian image + dhclient fixes]
     U[4-ubuntu-subscriber-image<br/>Ubuntu image]
     CI[2-ci-publish-dockerhub<br/>CI pipeline to Docker Hub]
-
     WF[7-review-manual-workflow<br/>Workflow audit + n8n design]
+    MI[22-mgmt-iface-awareness<br/>MGMT_IFACE route removal]
+    CL[27-containerlab-topology<br/>osvbng lab topology]
+    RF[13-robot-framework<br/>Robot Framework tests]
+    RC[5-rust-collector<br/>bngtester-server + bngtester-client]
+    DSCP[32-dscp-marking<br/>DSCP/TOS on data streams]
+    ECN[33-ecn-marking<br/>ECN marking + CE detection]
+    PSC[34-per-stream-config<br/>Per-stream size/rate/pattern]
+    MS[35-multi-subscriber<br/>Concurrent client sessions]
+    BI[44-bind-interface<br/>Bind iface + source IP]
+    CF[43-config-file<br/>YAML config profiles]
 
     B --> A
     A --> D
@@ -52,11 +62,31 @@ graph TD
     D --> WF
     U --> WF
     CI --> WF
-    A --> MI[22-mgmt-iface-awareness<br/>MGMT_IFACE route removal]
-    A --> CL[27-containerlab-topology<br/>osvbng lab topology]
+    A --> MI
+    A --> CL
     MI --> CL
-    CL --> RF[13-robot-framework<br/>Robot Framework tests]
+    CL --> RF
     A --> RF
+    A --> RC
+    D --> RC
+    U --> RC
+    CI --> RC
+    RC --> DSCP
+    DSCP --> ECN
+    RC --> PSC
+    DSCP --> PSC
+    RC --> MS
+    DSCP --> MS
+    ECN --> MS
+    PSC --> MS
+    RC --> BI
+    DSCP --> BI
+    RC --> CF
+    DSCP --> CF
+    ECN --> CF
+    PSC --> CF
+    MS --> CF
+    BI --> CF
 
     style B fill:#2da44e,color:#fff
     style A fill:#2da44e,color:#fff
@@ -67,6 +97,13 @@ graph TD
     style MI fill:#2da44e,color:#fff
     style CL fill:#2da44e,color:#fff
     style RF fill:#2da44e,color:#fff
+    style RC fill:#2da44e,color:#fff
+    style DSCP fill:#2da44e,color:#fff
+    style ECN fill:#2da44e,color:#fff
+    style PSC fill:#2da44e,color:#fff
+    style MS fill:#2da44e,color:#fff
+    style BI fill:#2da44e,color:#fff
+    style CF fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
@@ -148,6 +185,13 @@ Decisions that affect future specs. Read these before proposing new work.
 - **Server `--data-bind-iface` constrains receiver socket.** Validates traffic path in hairpin/multi-homed scenarios.
 - **Loopback requires rp_filter=0.** Linux drops martian packets by default. Users must disable rp_filter or use network namespaces for single-host hairpin testing.
 - **Source IP validated by kernel bind().** No user-space precheck — EADDRNOTAVAIL gives authoritative error.
+
+### From 43-config-file
+
+- **YAML config via `serde_yml` (maintained fork).** Not deprecated `serde_yaml`. `#[serde(deny_unknown_fields)]` rejects typos at startup.
+- **Three-tier merge: CLI > config file > built-in default.** Uses clap's `value_source()` to distinguish user-provided CLI flags from defaults. Config file values only override clap defaults, never explicit CLI flags.
+- **Server address in config file.** `server:` field makes config files self-contained — `bngtester-client --config profile.yaml` works with no positional arg.
+- **Stream overrides deep merge by ID.** CLI `--stream-*` flags override matching stream ID fields from config. Thresholds merge by key.
 
 ### From 35-multi-subscriber
 
