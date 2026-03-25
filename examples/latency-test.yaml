@@ -1,0 +1,8 @@
+# Basic latency test — UDP probes at 100pps for 10 seconds
+server: 10.0.0.2:5000
+mode: latency
+duration: 10
+rate: 100
+size: 512
+pattern: fixed
+output: text

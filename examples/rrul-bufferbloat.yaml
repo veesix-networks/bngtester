@@ -1,0 +1,18 @@
+# RRUL bufferbloat test — saturate link + measure latency under load
+server: 10.0.0.2:5000
+mode: rrul
+duration: 30
+streams: 2
+rrul_baseline: 5
+rrul_ramp_up: 100
+
+dscp: BE
+ecn: ect0
+
+output: json
+file: rrul-results.json
+
+thresholds:
+  bloat: 3.0
+  p99: 1000
+  loss: 0.1

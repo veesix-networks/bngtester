@@ -1,0 +1,35 @@
+# Multi-DSCP QoS validation — different traffic classes per stream
+server: 10.0.0.2:5000
+mode: latency
+duration: 10
+rate: 100
+size: 512
+
+# Global DSCP (default for unoverridden streams)
+dscp: BE
+
+# Per-stream overrides: VoIP vs bulk vs control
+stream_overrides:
+  - id: 0
+    size: 64
+    rate: 10000
+    pattern: fixed
+    dscp: EF
+  - id: 1
+    size: 1518
+    rate: 500
+    pattern: imix
+    dscp: AF41
+  - id: 2
+    size: 512
+    rate: 100
+    pattern: fixed
+    dscp: CS6
+
+ecn: ect0
+output: json
+file: qos-results.json
+
+thresholds:
+  p99: 500
+  loss: 0.01
