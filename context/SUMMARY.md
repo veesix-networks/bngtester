@@ -38,8 +38,17 @@ graph TD
     D[3-debian-subscriber-image<br/>Debian image + dhclient fixes]
     U[4-ubuntu-subscriber-image<br/>Ubuntu image]
     CI[2-ci-publish-dockerhub<br/>CI pipeline to Docker Hub]
-
     WF[7-review-manual-workflow<br/>Workflow audit + n8n design]
+    MI[22-mgmt-iface-awareness<br/>MGMT_IFACE route removal]
+    CL[27-containerlab-topology<br/>osvbng lab topology]
+    RF[13-robot-framework<br/>Robot Framework tests]
+    RC[5-rust-collector<br/>bngtester-server + bngtester-client]
+    DSCP[32-dscp-marking<br/>DSCP/TOS on data streams]
+    ECN[33-ecn-marking<br/>ECN marking + CE detection]
+    PSC[34-per-stream-config<br/>Per-stream size/rate/pattern]
+    MS[35-multi-subscriber<br/>Concurrent client sessions]
+    BI[44-bind-interface<br/>Bind iface + source IP]
+    CF[43-config-file<br/>YAML config profiles]
 
     B --> A
     A --> D
@@ -53,11 +62,31 @@ graph TD
     D --> WF
     U --> WF
     CI --> WF
-    A --> MI[22-mgmt-iface-awareness<br/>MGMT_IFACE route removal]
-    A --> CL[27-containerlab-topology<br/>osvbng lab topology]
+    A --> MI
+    A --> CL
     MI --> CL
-    CL --> RF[13-robot-framework<br/>Robot Framework tests]
+    CL --> RF
     A --> RF
+    A --> RC
+    D --> RC
+    U --> RC
+    CI --> RC
+    RC --> DSCP
+    DSCP --> ECN
+    RC --> PSC
+    DSCP --> PSC
+    RC --> MS
+    DSCP --> MS
+    ECN --> MS
+    PSC --> MS
+    RC --> BI
+    DSCP --> BI
+    RC --> CF
+    DSCP --> CF
+    ECN --> CF
+    PSC --> CF
+    MS --> CF
+    BI --> CF
 
     style B fill:#2da44e,color:#fff
     style A fill:#2da44e,color:#fff
@@ -68,6 +97,13 @@ graph TD
     style MI fill:#2da44e,color:#fff
     style CL fill:#2da44e,color:#fff
     style RF fill:#2da44e,color:#fff
+    style RC fill:#2da44e,color:#fff
+    style DSCP fill:#2da44e,color:#fff
+    style ECN fill:#2da44e,color:#fff
+    style PSC fill:#2da44e,color:#fff
+    style MS fill:#2da44e,color:#fff
+    style BI fill:#2da44e,color:#fff
+    style CF fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
