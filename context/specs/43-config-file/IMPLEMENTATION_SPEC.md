@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add `--config <PATH>` flag to both bngtester-client and bngtester-server that loads test configuration from a YAML file. Config files define complete test profiles — streams, DSCP/ECN, packet sizes, rates, patterns, thresholds, and bind settings in a single file. CLI flags override config file values. This replaces the growing CLI flag sprawl (23 client flags, 9 server flags) with reusable, version-controllable test definitions.
+Add `--config <PATH>` flag to both bngtester-client and bngtester-server that loads test configuration from a YAML file. Config files define complete test profiles — server address, streams, DSCP/ECN, packet sizes, rates, patterns, thresholds, bind settings, and output options in a single file. CLI flags override config file values (using clap's `value_source()` to distinguish user-provided from defaults). Strict rejection of unknown YAML fields to prevent typo-driven misconfigurations.
 
 ## Source Issue
 
@@ -10,25 +10,24 @@ Add `--config <PATH>` flag to both bngtester-client and bngtester-server that lo
 
 ## Current State
 
-- Client has 23 CLI flags including per-stream overrides, DSCP, ECN, bind, thresholds.
-- Server has 9 CLI flags including combined mode, max-clients, timeout.
-- Complex test scenarios are unreadable as CLI invocations.
-- No config file support — all configuration via CLI flags only.
-- `serde` and `serde_json` already in deps. Need to add `serde_yaml`.
+- Client has 23+ CLI flags including per-stream overrides, DSCP, ECN, bind, thresholds.
+- Server has 9+ CLI flags including combined mode, max-clients, timeout.
+- All `Cli` struct fields use `default_value` — clap cannot distinguish "user typed --duration 30" from "default 30".
+- `serde` and `serde_json` already in deps.
+- Depends on #44 (bind-interface) being merged for bind config fields.
 
 ## Design
 
-### Format Choice: YAML
+### Format: YAML
 
-YAML over TOML because:
-- More natural for nested stream definitions
-- Familiar to network engineers (Ansible, containerlab, osvbng all use YAML)
-- Better support for lists of complex objects (stream overrides)
+YAML via a maintained crate. The original `serde_yaml` (dtolnay) is deprecated/archived. Use `serde_yml` (maintained fork) instead.
 
 ### Client Config File
 
 ```yaml
 # bngtester client test profile
+server: 10.0.0.2:5000
+
 mode: rrul
 duration: 30
 protocol: tcp
@@ -46,7 +45,7 @@ streams: 2
 dscp: EF
 ecn: ect0
 
-# Bind
+# Bind (requires #44)
 bind_iface: eth1
 source_ip: 10.255.0.2
 control_bind_ip: 10.255.0.2
@@ -59,15 +58,15 @@ output: json
 file: results.json
 raw_file: packets.jsonl
 
-# Thresholds
+# Thresholds (merged by key)
 thresholds:
   p99: 1000
   loss: 0.1
   bloat: 3.0
   jitter: 100
 
-# Per-stream overrides
-streams_config:
+# Per-stream overrides (merged by stream id)
+stream_overrides:
   - id: 0
     size: 64
     rate: 10000
@@ -99,20 +98,33 @@ timeout: 120
 thresholds:
   p99: 1000
   loss: 0.1
-
-# Histogram
-histogram_buckets: "10,50,100,500,1000,5000,10000"
 ```
+
+### Merge Priority via value_source()
+
+```
+User-provided CLI flag > Config file value > Built-in default
+```
+
+Implementation uses clap's `ArgMatches::value_source()` to distinguish `ValueSource::CommandLine` from `ValueSource::DefaultValue`:
+
+1. Parse CLI via `Cli::parse()` to get `ArgMatches`
+2. Load config file (if `--config` provided)
+3. For each field: if `value_source() == CommandLine`, use CLI value. Otherwise use config file value if present, else built-in default.
+
+This avoids changing all `Cli` fields to `Option<T>` — the existing struct stays as-is, and the merge logic reads from `ArgMatches` source metadata.
 
 ### Config Structs
 
 ```rust
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ClientConfig {
+    pub server: Option<String>,
     pub mode: Option<String>,
     pub duration: Option<u32>,
     pub protocol: Option<String>,
-    pub size: Option<usize>,
+    pub size: Option<u32>,
     pub rate: Option<u32>,
     pub pattern: Option<String>,
     pub cross_host: Option<bool>,
@@ -129,74 +141,95 @@ pub struct ClientConfig {
     pub file: Option<String>,
     pub raw_file: Option<String>,
     pub thresholds: Option<HashMap<String, f64>>,
-    pub streams_config: Option<Vec<StreamConfigEntry>>,
+    pub stream_overrides: Option<Vec<StreamOverrideEntry>>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct StreamConfigEntry {
+#[serde(deny_unknown_fields)]
+pub struct StreamOverrideEntry {
     pub id: u8,
     pub size: Option<u32>,
     pub rate: Option<u32>,
     pub pattern: Option<String>,
     pub dscp: Option<String>,
 }
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ServerFileConfig {
+    pub listen: Option<String>,
+    pub output: Option<String>,
+    pub file: Option<String>,
+    pub raw_file: Option<String>,
+    pub data_bind_iface: Option<String>,
+    pub combined: Option<bool>,
+    pub max_clients: Option<u32>,
+    pub timeout: Option<u64>,
+    pub thresholds: Option<HashMap<String, f64>>,
+}
 ```
 
-All fields are `Option` — only specified fields override defaults. CLI flags override config file values.
+### Schema Strictness
 
-### Merge Priority
+`#[serde(deny_unknown_fields)]` on all config structs. A typo like `max_client` or `stream_config` produces a clear parse error at startup — not a silent misconfiguration. No `--allow-unknown-config-keys` escape hatch in the initial implementation.
 
-```
-CLI flags > Config file > Built-in defaults
-```
+### Stream Override Merge
 
-Implementation: parse CLI first, then load config file, then merge with CLI taking precedence. For `Option` fields, CLI `Some` wins over config `Some`. For Vec fields (thresholds, streams), CLI values append/override config values.
+When both config file `stream_overrides` and CLI `--stream-*` flags are provided:
+- Deep merge by stream ID: CLI field overrides config file field for the same stream
+- CLI-only stream IDs are added
+- Config-only stream IDs are preserved
 
-### Error Handling
+### Thresholds Merge
 
-- File not found → clear error with path
-- YAML parse error → error with line number and field name
-- Unknown fields → warning (not error) to allow forward compatibility
-- Invalid values (e.g., dscp: "INVALID") → same validation as CLI, error at startup
+When both config file `thresholds` map and CLI `--threshold` flags are provided:
+- Merge by key: CLI key overrides config file key
+- Config-only keys preserved
 
-### Config Module Location
+### Validation
 
-`src/config.rs` — config file parsing, merge logic, `ClientConfig` and `ServerConfig` structs.
+All config values go through the same validation as CLI values (parse_mode, parse_pattern, parse_dscp, etc.) after merge. Invalid values produce clear errors with the field name and value.
+
+### Server Address in Config
+
+`server` is optional in the config file. If provided, the client can run with just `--config profile.yaml` (no positional arg). If both config and CLI provide server, CLI wins. If neither provides it, error at startup.
 
 ## File Plan
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `Cargo.toml` | Modify | Add `serde_yaml` dependency |
-| `src/config.rs` | Create | `ClientConfig`, `ServerConfig`, `StreamConfigEntry`, YAML parsing, merge logic |
+| `Cargo.toml` | Modify | Add `serde_yml` dependency |
+| `src/config.rs` | Create | `ClientConfig`, `ServerFileConfig`, `StreamOverrideEntry`, YAML parsing, merge logic |
 | `src/lib.rs` | Modify | Add `pub mod config;` |
-| `src/bin/client.rs` | Modify | Add `--config` flag, load config, merge with CLI |
-| `src/bin/server.rs` | Modify | Add `--config` flag, load config, merge with CLI |
+| `src/bin/client.rs` | Modify | Add `--config` flag, load config, merge via value_source(), make server arg optional |
+| `src/bin/server.rs` | Modify | Add `--config` flag, load config, merge via value_source() |
 
 ## Implementation Order
 
-1. Add `serde_yaml` to Cargo.toml
-2. `src/config.rs` — config structs, YAML parsing, merge logic, unit tests
-3. Client integration — `--config` flag, load + merge
-4. Server integration — `--config` flag, load + merge
+1. Add `serde_yml` to Cargo.toml
+2. `src/config.rs` — config structs with deny_unknown_fields, YAML load, merge helpers, validation
+3. Client integration — `--config` flag, value_source() merge, optional server arg
+4. Server integration — `--config` flag, value_source() merge
 
 ## Testing
 
-- [ ] YAML config file parsed correctly (all fields)
-- [ ] Missing optional fields produce defaults
-- [ ] CLI flags override config file values
-- [ ] Config file values override built-in defaults
-- [ ] Per-stream config from YAML works (streams_config array)
-- [ ] Thresholds from YAML applied correctly
-- [ ] Unknown YAML fields produce warning, not error
-- [ ] Invalid YAML produces clear error with line reference
+- [ ] YAML config file parsed correctly (all client fields)
+- [ ] YAML server config parsed correctly
+- [ ] Unknown YAML fields produce clear parse error (deny_unknown_fields)
+- [ ] CLI flag overrides config file value (value_source = CommandLine)
+- [ ] Config file value used when CLI not provided (value_source = DefaultValue)
+- [ ] Built-in default used when neither CLI nor config provides value
+- [ ] `server` from config file works (no positional arg needed)
+- [ ] `server` from CLI overrides config file
+- [ ] Missing server in both config and CLI produces clear error
+- [ ] stream_overrides deep merge by ID works
+- [ ] Thresholds merge by key works
+- [ ] Invalid config values validated (bad mode, dscp, pattern)
 - [ ] File not found produces clear error with path
-- [ ] `--config` with no other flags works (full config from file)
-- [ ] `--config` with CLI overrides works (merge)
-- [ ] Server config file works (listen, combined, max_clients, timeout)
+- [ ] YAML syntax error produces clear error
 - [ ] No --config = existing CLI-only behavior unchanged
 - [ ] `cargo test` passes all existing + new tests
-- [ ] End-to-end: client with --config profile.yaml produces correct test
+- [ ] End-to-end: `--config profile.yaml` runs complete test
 
 ## Not In Scope
 
