@@ -28,6 +28,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [35-multi-subscriber](specs/35-multi-subscriber/) | [#35](https://github.com/veesix-networks/bngtester/issues/35) | Complete | Multi-subscriber concurrent sessions with combined reports |
 | [44-bind-interface](specs/44-bind-interface/) | [#44](https://github.com/veesix-networks/bngtester/issues/44) | Complete | Bind interface / source IP for bare metal testing |
 | [43-config-file](specs/43-config-file/) | [#43](https://github.com/veesix-networks/bngtester/issues/43) | Complete | YAML config file support with CLI override |
+| [45-config-docs](specs/45-config-docs/) | [#45](https://github.com/veesix-networks/bngtester/issues/45) | Complete | Configuration reference documentation |
 
 ## Spec Dependencies
 
@@ -49,6 +50,7 @@ graph TD
     MS[35-multi-subscriber<br/>Concurrent client sessions]
     BI[44-bind-interface<br/>Bind iface + source IP]
     CF[43-config-file<br/>YAML config profiles]
+    CD[45-config-docs<br/>Configuration reference]
 
     B --> A
     A --> D
@@ -87,6 +89,13 @@ graph TD
     PSC --> CF
     MS --> CF
     BI --> CF
+    CF --> CD
+    RC --> CD
+    DSCP --> CD
+    ECN --> CD
+    PSC --> CD
+    MS --> CD
+    BI --> CD
 
     style B fill:#2da44e,color:#fff
     style A fill:#2da44e,color:#fff
@@ -104,6 +113,7 @@ graph TD
     style MS fill:#2da44e,color:#fff
     style BI fill:#2da44e,color:#fff
     style CF fill:#2da44e,color:#fff
+    style CD fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
@@ -246,6 +256,8 @@ Decisions that affect future specs. Read these before proposing new work.
 | `lab/` | Yes | Containerlab topology (`bngtester.clab.yml`), osvbng config, FRR server config, smoke test, README |
 | `tests/` | Yes | Robot Framework suites: `01-entrypoint-validation`, `02-vlan-modes`, `03-cleanup` (standalone), `04-ipoe-bng` (integration). Shared keywords in `common.robot` + `subscriber.robot`. Runner: `rf-run.sh` |
 | `src/` | Yes | Rust crate — `bngtester-server` and `bngtester-client` binaries. Packet format, control protocol, metrics (latency/jitter/loss/throughput/time-series), report formatters (JSON/JUnit/JSONL/text). Client binary included in subscriber images via multi-stage Docker build. |
+| `examples/` | Yes | YAML config file examples: latency, RRUL, multi-DSCP, multi-subscriber server, bare metal loopback |
+| `docs/` | Yes | `CONFIGURATION.md` — complete CLI and config file reference with test scenario cookbook |
 | `.github/workflows/` | Yes | `publish-images.yml` — builds and publishes subscriber images to Docker Hub |
 | `context/` | Yes | Workflow docs and bootstrap spec |
 | `.github/ISSUE_TEMPLATE/` | Yes | Feature, bug, enhancement, testing templates |
