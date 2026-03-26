@@ -2,7 +2,7 @@
 
 ## Overview
 
-Make reports CGNAT-aware by showing both the translated address (what the server sees after CGNAT) and the subscriber's real address (from the client's hello message). Ensures `client_id` is the primary identifier for multi-subscriber scenarios where CGNAT makes IPs unreliable.
+Make reports CGNAT-aware by showing both the translated address (what the server sees after CGNAT) and the subscriber's real address (from the client's `--source-ip` or hello message). Ensures `client_id` is the primary identifier for multi-subscriber scenarios where CGNAT makes IPs unreliable.
 
 ## Source Issue
 
@@ -10,96 +10,105 @@ Make reports CGNAT-aware by showing both the translated address (what the server
 
 ## Current State
 
-- `HelloMsg` already carries `source_ip: Option<String>` (the client's real IP when `--source-ip` is set).
-- `ClientReport` has `peer: String` (the TCP socket address the server sees — this is the CGNAT translated address).
-- `ClientReport` has `client_id: String` (explicit identity).
+- `HelloMsg` already carries `source_ip: Option<String>` (set when `--source-ip` is used).
+- `ClientReport` has `peer: String` (TCP socket address the server sees — CGNAT translated if CGNAT in path).
+- `ClientReport` has `client_id: String`.
 - `StreamReport` has `source_ip: Option<String>` (from bind-interface).
-- The server's per-session `TestReport` uses `peer.to_string()` for the `client` field.
-- **Gap:** No `subscriber_ip` field showing the client's real address alongside the translated `peer`. When CGNAT is active, `peer` is the public translated IP:port, not the subscriber's access-side address.
 
 ## Design
 
 ### Dual Addressing
 
-Add `subscriber_ip` to report output alongside existing `peer`:
+- `peer` — the address the server's TCP socket sees (CGNAT translated address, includes port)
+- `subscriber_ip` — the client's self-reported real address from `HelloMsg.source_ip` (set via `--source-ip`)
 
-- `peer` — the address the server's TCP socket sees (CGNAT translated if CGNAT is in path, or real if direct)
-- `subscriber_ip` — the client's self-reported real address from `HelloMsg.source_ip`, or the client's local address if not explicitly set
+**No fallback to control socket local address.** The control channel may route via a management IP, not the data path subscriber IP. If `--source-ip` is not set, `subscriber_ip` is omitted — not populated with a potentially wrong address. Users behind CGNAT should always set `--source-ip` (or use `--config` with `source_ip` field).
 
-The client always sends its real address in the hello message. Currently `source_ip` is only sent when `--source-ip` is set. Change: always send the client's local IP (from the control channel socket's local address) as a fallback.
+### Protocol
 
-### Protocol Change
-
-No new fields needed — `HelloMsg.source_ip` already exists. Just ensure the client always populates it:
-
-```rust
-// Current: only set when --source-ip is used
-pub source_ip: Option<String>,
-
-// New: always set — from --source-ip if provided, else from control socket local addr
-```
+No new fields needed — `HelloMsg.source_ip` already exists. The client only sends it when `--source-ip` is explicitly set (no change to current behavior).
 
 ### Report Changes
 
-**TestReport** — add `subscriber_ip`:
+**TestConfig** — add `subscriber_ip` with `skip_serializing_if`:
 ```rust
 pub struct TestConfig {
-    // existing: mode, duration_secs, client (peer addr), server
-    pub subscriber_ip: Option<String>,  // client's real address
+    pub mode: TestMode,
+    pub duration_secs: u32,
+    pub client: String,           // peer address (CGNAT translated)
+    pub server: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscriber_ip: Option<String>,  // client's real address (from --source-ip)
 }
 ```
 
-**ClientReport** (combined mode) — add `subscriber_ip`:
+**ClientReport** (combined mode) — add `subscriber_ip` with `skip_serializing_if`:
 ```rust
 pub struct ClientReport {
     pub client_id: String,
-    pub peer: String,              // CGNAT translated address
-    pub subscriber_ip: Option<String>,  // client's real address
+    pub peer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscriber_ip: Option<String>,
     pub report: TestReport,
 }
 ```
 
-**Text output:**
+This is an **additive JSON schema change**. Existing consumers that ignore unknown fields are unaffected. Strict schema validators need to tolerate the new optional field. When `subscriber_ip` is absent (no `--source-ip` set), the field is omitted entirely from JSON output.
+
+### Text Output
+
+**Combined report headers** — show dual addressing when CGNAT detected (IPs differ):
 ```
 --- subscriber-1 (peer: 198.51.100.5:43210, subscriber: 10.255.0.2) ---
 ```
 
-Without CGNAT (peer == subscriber), show simplified:
+**Simplified** when peer IP matches subscriber IP (no CGNAT):
 ```
 --- subscriber-1 (10.255.0.2:43210) ---
 ```
 
-### Client-ID as Primary Identifier
+**No subscriber_ip** (--source-ip not set):
+```
+--- subscriber-1 (198.51.100.5:43210) ---
+```
 
-Already implemented — `--client-id` is used for multi-subscriber grouping. This spec just reinforces that `client_id` takes precedence and documents that CGNAT users should always set `--client-id` since multiple subscribers may share the same CGNAT public IP.
+**Comparison logic:** Parse `peer` as `SocketAddr`, compare `peer.ip()` to `subscriber_ip` parsed as `IpAddr`. String comparison would fail because peer includes port. On parse failure, fall back to dual display.
+
+### Single-client report
+
+Same logic in `TestConfig.client` vs `TestConfig.subscriber_ip`:
+```
+Client: 198.51.100.5:43210 (subscriber: 10.255.0.2)
+```
+
+Or simplified when IPs match or subscriber_ip absent.
 
 ## File Plan
 
 | File | Action | Purpose |
 |------|--------|---------|
-| `src/bin/client.rs` | Modify | Always send local IP in hello source_ip (fallback from control socket) |
-| `src/bin/server.rs` | Modify | Read source_ip from hello, add subscriber_ip to TestReport and ClientReport |
-| `src/report/mod.rs` | Modify | Add `subscriber_ip` to TestConfig and ClientReport |
-| `src/report/text.rs` | Modify | Show subscriber_ip in combined report headers |
+| `src/report/mod.rs` | Modify | Add `subscriber_ip` to `TestConfig` and `ClientReport` with skip_serializing_if |
+| `src/bin/server.rs` | Modify | Read source_ip from hello, populate subscriber_ip in TestConfig and ClientReport |
+| `src/report/text.rs` | Modify | Dual/simplified addressing in combined headers and single-client output |
 | `src/report/json.rs` | Modify | Update test constructors |
 | `src/report/junit.rs` | Modify | Update test constructors |
 
 ## Implementation Order
 
-1. Client — always populate source_ip in hello
-2. Report structs — add subscriber_ip fields
-3. Server — read source_ip from hello, include in reports
-4. Text formatter — show dual addressing in combined headers
+1. Report structs — add subscriber_ip fields
+2. Server — read source_ip from hello, populate in reports
+3. Text formatter — dual/simplified addressing logic
+4. Test constructors — update with new fields
 
 ## Testing
 
-- [ ] Client always sends source_ip in hello (even without --source-ip flag)
-- [ ] Server report includes subscriber_ip from hello
-- [ ] Combined report shows both peer and subscriber_ip per client
-- [ ] Text output shows dual addressing when peer != subscriber_ip
-- [ ] Text output shows simplified when peer == subscriber_ip (no CGNAT)
-- [ ] JSON report includes subscriber_ip field
-- [ ] No subscriber_ip = field omitted (backward compatible)
+- [ ] subscriber_ip populated from hello source_ip when --source-ip set
+- [ ] subscriber_ip omitted when --source-ip not set
+- [ ] Combined text: dual addressing when peer IP != subscriber IP
+- [ ] Combined text: simplified when peer IP == subscriber IP
+- [ ] Combined text: no subscriber_ip shows peer only
+- [ ] JSON: subscriber_ip present with skip_serializing_if (omitted when None)
+- [ ] IP comparison is IP-only (strips port from peer)
 - [ ] `cargo test` passes all existing + new tests
 
 ## Not In Scope
@@ -107,3 +116,4 @@ Already implemented — `--client-id` is used for multi-subscriber grouping. Thi
 - CGNAT detection (whether CGNAT is actually in the path)
 - NAT traversal for reverse-path streams
 - STUN/TURN for NAT discovery
+- Fallback to control socket local address (explicitly rejected — may be wrong IP)
