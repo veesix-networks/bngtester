@@ -107,6 +107,7 @@ struct RegistryInner {
 struct CompletedSession {
     client_id: String,
     peer: SocketAddr,
+    subscriber_ip: Option<String>,
     report: TestReport,
 }
 
@@ -499,6 +500,7 @@ async fn run_combined_mode(listener: &TcpListener, config: &Arc<ServerConfig>) {
             .map(|s| ClientReport {
                 client_id: s.client_id,
                 peer: s.peer.to_string(),
+                subscriber_ip: s.subscriber_ip,
                 report: s.report,
             })
             .collect(),
@@ -893,6 +895,7 @@ async fn handle_session(
             duration_secs: hello.duration_secs,
             client: peer.to_string(),
             server: config.listen.to_string(),
+            subscriber_ip: hello.source_ip.clone(),
         },
         streams: {
             let mut stream_overrides = StreamOverrides::default();
@@ -989,6 +992,7 @@ async fn handle_session(
     Ok(CompletedSession {
         client_id,
         peer,
+        subscriber_ip: hello.source_ip.clone(),
         report,
     })
 }

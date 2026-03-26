@@ -29,6 +29,7 @@ Three subscriber images (Alpine, Debian, and Ubuntu) are built and published to 
 | [44-bind-interface](specs/44-bind-interface/) | [#44](https://github.com/veesix-networks/bngtester/issues/44) | Complete | Bind interface / source IP for bare metal testing |
 | [43-config-file](specs/43-config-file/) | [#43](https://github.com/veesix-networks/bngtester/issues/43) | Complete | YAML config file support with CLI override |
 | [45-config-docs](specs/45-config-docs/) | [#45](https://github.com/veesix-networks/bngtester/issues/45) | Complete | Configuration reference documentation |
+| [50-cgnat-reporting](specs/50-cgnat-reporting/) | [#50](https://github.com/veesix-networks/bngtester/issues/50) | Complete | CGNAT-aware dual addressing in reports |
 
 ## Spec Dependencies
 
@@ -51,6 +52,7 @@ graph TD
     BI[44-bind-interface<br/>Bind iface + source IP]
     CF[43-config-file<br/>YAML config profiles]
     CD[45-config-docs<br/>Configuration reference]
+    CG[50-cgnat-reporting<br/>CGNAT dual addressing]
 
     B --> A
     A --> D
@@ -96,6 +98,8 @@ graph TD
     PSC --> CD
     MS --> CD
     BI --> CD
+    MS --> CG
+    BI --> CG
 
     style B fill:#2da44e,color:#fff
     style A fill:#2da44e,color:#fff
@@ -114,6 +118,7 @@ graph TD
     style BI fill:#2da44e,color:#fff
     style CF fill:#2da44e,color:#fff
     style CD fill:#2da44e,color:#fff
+    style CG fill:#2da44e,color:#fff
 ```
 
 Legend: green = complete, blue = in progress, grey = planned
