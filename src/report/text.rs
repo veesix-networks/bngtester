@@ -170,12 +170,22 @@ pub fn to_combined_text_string(report: &CombinedReport) -> String {
     writeln!(out).unwrap();
 
     for cr in &report.clients {
-        writeln!(
-            out,
-            "── client: {} (peer: {}) ──",
-            cr.client_id, cr.peer
-        )
-        .unwrap();
+        let header = match &cr.subscriber_ip {
+            Some(sub_ip) => {
+                // Check if peer IP matches subscriber IP (no CGNAT)
+                let peer_ip_matches = cr.peer.parse::<std::net::SocketAddr>()
+                    .ok()
+                    .map(|sa| sa.ip().to_string() == *sub_ip)
+                    .unwrap_or(false);
+                if peer_ip_matches {
+                    format!("── client: {} ({}) ──", cr.client_id, cr.peer)
+                } else {
+                    format!("── client: {} (peer: {}, subscriber: {}) ──", cr.client_id, cr.peer, sub_ip)
+                }
+            }
+            None => format!("── client: {} ({}) ──", cr.client_id, cr.peer),
+        };
+        writeln!(out, "{header}").unwrap();
         out.push_str(&to_text_string(&cr.report));
         writeln!(out).unwrap();
     }
@@ -199,6 +209,7 @@ mod tests {
                 duration_secs: 10,
                 client: "10.0.0.2".to_string(),
                 server: "10.0.0.1:5000".to_string(),
+                subscriber_ip: None,
             },
             streams: vec![StreamReport {
                 id: 0,
@@ -264,6 +275,7 @@ mod tests {
                 duration_secs: 30,
                 client: "10.0.0.2".to_string(),
                 server: "10.0.0.1:5000".to_string(),
+                subscriber_ip: None,
             },
             streams: vec![],
             bufferbloat: Some(BufferbloatReport {

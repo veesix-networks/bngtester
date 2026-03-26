@@ -41,6 +41,7 @@ mod tests {
                 duration_secs: 10,
                 client: "10.0.0.2".to_string(),
                 server: "10.0.0.1:5000".to_string(),
+                subscriber_ip: None,
             },
             streams: vec![StreamReport {
                 id: 0,

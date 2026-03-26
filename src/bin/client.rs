@@ -776,6 +776,7 @@ async fn run_test(
             duration_secs: resolved.duration,
             client: "local".to_string(),
             server: resolved.server.to_string(),
+            subscriber_ip: resolved.source_ip.map(|ip| ip.to_string()),
         },
         streams: report_streams,
         bufferbloat: None,

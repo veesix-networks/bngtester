@@ -34,6 +34,8 @@ pub struct TestConfig {
     pub duration_secs: u32,
     pub client: String,
     pub server: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscriber_ip: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -132,6 +134,8 @@ pub struct CombinedReport {
 pub struct ClientReport {
     pub client_id: String,
     pub peer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subscriber_ip: Option<String>,
     pub report: TestReport,
 }
 
